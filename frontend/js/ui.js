@@ -78,12 +78,12 @@ export function debounce(callback, delay = 250) {
 const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
 const reveals = new WeakMap();
 
-export function reveal(element) {
+export function reveal(element, { duration = 190, offset = 5 } = {}) {
   reveals.get(element)?.cancel();
   if (reducedMotion.matches) return;
   const animation = element.animate(
-    [{ opacity: .45, transform: 'translateY(5px)' }, { opacity: 1, transform: 'translateY(0)' }],
-    { duration: 190, easing: 'cubic-bezier(.2, .7, .25, 1)' },
+    { opacity: [.55, 1], ...(offset ? { translate: [`0 ${offset}px`, '0 0'] } : {}) },
+    { duration, easing: 'cubic-bezier(.2, .7, .25, 1)' },
   );
   reveals.set(element, animation);
 }

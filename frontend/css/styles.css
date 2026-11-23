@@ -18,6 +18,10 @@
   --transition-ease: cubic-bezier(.2, .7, .25, 1);
 }
 * { box-sizing: border-box; }
+html { scrollbar-gutter: stable; }
+@supports not (scrollbar-gutter: stable) {
+  html { overflow-y: scroll; }
+}
 body { margin: 0; background: var(--background); color: var(--ink); min-width: 300px; }
 button, input, select, textarea { font: inherit; }
 button, select { cursor: pointer; }
@@ -107,12 +111,7 @@ textarea { resize: vertical; min-height: 96px; }
 .chart-trend, .chart-breakdown { height: 252px; position: relative; }
 .breakdown-layout { display: grid; grid-template-columns: minmax(0, 190px) minmax(0, 1fr); align-items: center; gap: clamp(14px, 2vw, 28px); height: 252px; }
 .chart-breakdown { height: auto; aspect-ratio: 1; }
-.chart-breakdown canvas { position: relative; z-index: 1; }
 .chart-empty { position: absolute; inset: 0; display: grid; place-items: center; text-align: center; color: var(--muted); font-size: .9rem; }
-.breakdown-total { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; pointer-events: none; text-align: center; }
-.breakdown-total.tooltip-active { visibility: hidden; }
-.breakdown-total strong { font-size: clamp(1.07rem, 1.6vw, 1.52rem); font-variant-numeric: tabular-nums; letter-spacing: -.035em; }
-.breakdown-total span { color: var(--muted); font-size: .81rem; margin-top: 4px; }
 .legend { margin: 0; padding: 0; list-style: none; display: grid; gap: 13px; }
 .legend li { display: grid; grid-template-columns: 9px minmax(0, 1fr) auto; align-items: center; gap: 9px; font-size: .9rem; color: var(--soft); min-width: 0; }
 .legend strong { color: var(--ink); font-variant-numeric: tabular-nums; }

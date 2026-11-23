@@ -48,7 +48,6 @@ export function mountDashboard(root) {
         <div class="breakdown-layout">
           <div class="chart-breakdown">
             <canvas id="structure-chart" role="img"></canvas>
-            <div class="breakdown-total" hidden><strong></strong><span>Всего</span></div>
             <span class="chart-empty" id="structure-empty" hidden>Нет данных</span>
           </div>
           <ul class="legend"></ul>
@@ -107,13 +106,10 @@ export function mountDashboard(root) {
 
     const trendCanvas = root.querySelector('#trend-chart');
     const structureCanvas = root.querySelector('#structure-chart');
-    const center = root.querySelector('.breakdown-total');
-    center.classList.remove('tooltip-active');
     const hasTrend = panel?.trend.some(({ value }) => Number(value) !== 0);
     const total = panel?.structure.reduce((sum, { value }) => sum + Number(value), 0) ?? 0;
     trendCanvas.hidden = !hasTrend;
     structureCanvas.hidden = !total;
-    center.hidden = !total;
     root.querySelector('#trend-empty').hidden = !panel || hasTrend;
     root.querySelector('#structure-empty').hidden = !panel || total !== 0;
     root.querySelector('.legend').innerHTML = panel?.structure.map(({ label, value }, index) => `
@@ -129,10 +125,9 @@ export function mountDashboard(root) {
       charts.push(chart);
     }
     if (total) {
-      center.querySelector('strong').textContent = mode.financial ? compactMoney(total) : number(total);
-      center.title = format(total);
-      structureCanvas.setAttribute('aria-label', `${mode.structure}. ${panel.structure.map(({ label, value }) => `${label}, ${format(value)}`).join('; ')}.`);
-      charts.push(new Chart(structureCanvas, breakdownConfig(panel.structure, format, total, center)));
+      const totalLabel = mode.financial ? compactMoney(total) : number(total);
+      structureCanvas.setAttribute('aria-label', `${mode.structure}. Всего ${format(total)}. ${panel.structure.map(({ label, value }) => `${label}, ${format(value)}`).join('; ')}.`);
+      charts.push(new Chart(structureCanvas, breakdownConfig(panel.structure, format, total, totalLabel)));
     }
   }
 
@@ -265,13 +260,45 @@ function trendConfig(mode, points, format) {
   };
 }
 
-function breakdownConfig(points, format, total, center) {
+function drawBreakdownTotal(chart, label) {
+  const { ctx } = chart;
+  const { x, y, innerRadius } = chart.getDatasetMeta(0).data[0];
+  if (!innerRadius) return;
+
+  const radius = innerRadius * .88;
+  const valueSize = Math.min(24, radius * .42);
+  const captionSize = Math.min(13, radius * .26);
+  const valueOffset = -captionSize * .65;
+  const captionOffset = valueSize * .65;
+  const font = '"Segoe UI", system-ui, sans-serif';
+
+  ctx.save();
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  // Use the chord at the outside edge of each line, so even its corners fit.
+  for (const [text, size, offset, weight, color] of [
+    [label, valueSize, valueOffset, 750, '#f2f1ef'],
+    ['Всего', captionSize, captionOffset, 400, '#a9abb7'],
+  ]) {
+    const edge = Math.abs(offset) + size / 2;
+    const width = 2 * Math.sqrt(radius ** 2 - edge ** 2);
+    ctx.font = `${weight} ${size}px ${font}`;
+    const fittedSize = size * Math.min(1, width / ctx.measureText(text).width);
+    ctx.font = `${weight} ${fittedSize}px ${font}`;
+    ctx.fillStyle = color;
+    ctx.fillText(text, x, y + offset);
+  }
+  ctx.restore();
+}
+
+function breakdownConfig(points, format, total, totalLabel) {
   return {
     type: 'doughnut',
     plugins: [{
-      id: 'hide-total-under-tooltip',
-      afterDraw(chart) {
-        center.classList.toggle('tooltip-active', Boolean(chart.tooltip?.opacity));
+      id: 'breakdown-total',
+      afterDatasetsDraw(chart) {
+        drawBreakdownTotal(chart, totalLabel);
       },
     }],
     data: {
@@ -285,7 +312,11 @@ function breakdownConfig(points, format, total, center) {
       responsive: true, maintainAspectRatio: false, cutout: '73%', animation, layout: { padding: 5 },
       plugins: {
         legend: { display: false },
-        tooltip: { ...tooltip, callbacks: { label: ({ raw }) => `${format(raw)} · ${percent.format(raw / total)}` } },
+        tooltip: {
+          ...tooltip,
+          animations: { opacity: { duration: 0 } },
+          callbacks: { label: ({ raw }) => `${format(raw)} · ${percent.format(raw / total)}` },
+        },
       },
     },
   };

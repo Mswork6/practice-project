@@ -31,7 +31,7 @@ function route(focus = false) {
   if (focus) {
     window.scrollTo(0, 0);
     root.focus({ preventScroll: true });
-    reveal(root);
+    reveal(root, { duration: 280, offset: 0 });
   }
 }
 window.addEventListener('hashchange', () => route(true));

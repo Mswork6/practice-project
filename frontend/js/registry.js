@@ -37,7 +37,7 @@ export function mountRegistry(root, config) {
       if (signal.aborted) return;
       if (!data.total) {
         results.innerHTML = '<p class="list-message">Записи не найдены.</p>';
-        reveal(results);
+        reveal(results, { offset: 0 });
         return;
       }
       const pages = Math.ceil(data.total / data.page_size);
@@ -64,13 +64,13 @@ export function mountRegistry(root, config) {
       results.querySelectorAll('[data-record]').forEach((button) => button.addEventListener('click', () => {
         config.detail(Number(button.dataset.record), load);
       }));
-      reveal(results);
+      reveal(results, { offset: 0 });
     } catch (error) {
       if (signal.aborted) return;
       results.innerHTML = `<p class="list-message danger-text" role="alert">${escape(error.message)}
         <button type="button" class="button small">Повторить</button></p>`;
       results.querySelector('button').addEventListener('click', load);
-      reveal(results);
+      reveal(results, { offset: 0 });
     } finally {
       if (!signal.aborted) results.setAttribute('aria-busy', 'false');
     }
