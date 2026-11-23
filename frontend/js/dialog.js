@@ -1,5 +1,5 @@
 import { api } from './api.js';
-import { debounce, escape, options } from './ui.js';
+import { debounce, escape, options, reveal } from './ui.js';
 
 const dialog = document.querySelector('#dialog');
 const title = dialog.querySelector('#dialog-title');
@@ -25,6 +25,8 @@ export function openDialog(heading, html) {
   if (!dialog.open) {
     opener = document.activeElement;
     dialog.showModal();
+  } else {
+    reveal(content);
   }
   function focusContent() {
     const initial = content.querySelector('[autofocus]') || dialog.querySelector('#dialog-close');
@@ -39,6 +41,7 @@ export function openDialog(heading, html) {
       title.textContent = newHeading;
       content.innerHTML = newHtml;
       focusContent();
+      reveal(content);
       return true;
     },
     close() {

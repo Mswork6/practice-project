@@ -108,6 +108,7 @@ export function mountDashboard(root) {
     const trendCanvas = root.querySelector('#trend-chart');
     const structureCanvas = root.querySelector('#structure-chart');
     const center = root.querySelector('.breakdown-total');
+    center.classList.remove('tooltip-active');
     const hasTrend = panel?.trend.some(({ value }) => Number(value) !== 0);
     const total = panel?.structure.reduce((sum, { value }) => sum + Number(value), 0) ?? 0;
     trendCanvas.hidden = !hasTrend;
@@ -131,7 +132,7 @@ export function mountDashboard(root) {
       center.querySelector('strong').textContent = mode.financial ? compactMoney(total) : number(total);
       center.title = format(total);
       structureCanvas.setAttribute('aria-label', `${mode.structure}. ${panel.structure.map(({ label, value }) => `${label}, ${format(value)}`).join('; ')}.`);
-      charts.push(new Chart(structureCanvas, breakdownConfig(panel.structure, format, total)));
+      charts.push(new Chart(structureCanvas, breakdownConfig(panel.structure, format, total, center)));
     }
   }
 
@@ -264,9 +265,15 @@ function trendConfig(mode, points, format) {
   };
 }
 
-function breakdownConfig(points, format, total) {
+function breakdownConfig(points, format, total, center) {
   return {
     type: 'doughnut',
+    plugins: [{
+      id: 'hide-total-under-tooltip',
+      afterDraw(chart) {
+        center.classList.toggle('tooltip-active', Boolean(chart.tooltip?.opacity));
+      },
+    }],
     data: {
       labels: points.map(({ label }) => label),
       datasets: [{

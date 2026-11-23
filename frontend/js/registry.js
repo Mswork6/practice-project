@@ -1,5 +1,5 @@
 import { api } from './api.js';
-import { debounce, escape, icon, number, options } from './ui.js';
+import { debounce, escape, icon, number, options, reveal } from './ui.js';
 
 export const recordButton = (record, label) => `<button type="button" class="text-button" data-record="${record.id}">${escape(label)}</button>`;
 
@@ -37,6 +37,7 @@ export function mountRegistry(root, config) {
       if (signal.aborted) return;
       if (!data.total) {
         results.innerHTML = '<p class="list-message">Записи не найдены.</p>';
+        reveal(results);
         return;
       }
       const pages = Math.ceil(data.total / data.page_size);
@@ -63,11 +64,13 @@ export function mountRegistry(root, config) {
       results.querySelectorAll('[data-record]').forEach((button) => button.addEventListener('click', () => {
         config.detail(Number(button.dataset.record), load);
       }));
+      reveal(results);
     } catch (error) {
       if (signal.aborted) return;
       results.innerHTML = `<p class="list-message danger-text" role="alert">${escape(error.message)}
         <button type="button" class="button small">Повторить</button></p>`;
       results.querySelector('button').addEventListener('click', load);
+      reveal(results);
     } finally {
       if (!signal.aborted) results.setAttribute('aria-busy', 'false');
     }

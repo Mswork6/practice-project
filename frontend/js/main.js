@@ -4,7 +4,7 @@ import { closeDialog } from './dialog.js';
 import { finance } from './finance.js';
 import { properties } from './properties.js';
 import { mountRegistry } from './registry.js';
-import { icon, setAppDate, today } from './ui.js';
+import { icon, reveal, setAppDate, today } from './ui.js';
 
 const routes = { properties, contracts, finance };
 const root = document.querySelector('#content');
@@ -31,6 +31,7 @@ function route(focus = false) {
   if (focus) {
     window.scrollTo(0, 0);
     root.focus({ preventScroll: true });
+    reveal(root);
   }
 }
 window.addEventListener('hashchange', () => route(true));
