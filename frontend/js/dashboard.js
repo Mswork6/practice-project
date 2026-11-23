@@ -260,9 +260,19 @@ function trendConfig(mode, points, format) {
       }],
     },
     options: {
-      responsive: true, maintainAspectRatio: false, animation: false, interaction: { mode: 'index', intersect: false },
+      responsive: true, maintainAspectRatio: false,
+      // The canvas reveals the line. Keep Chart.js animation enabled for the tooltip.
+      animation: reducedMotion.matches ? false : { duration: 0 },
+      interaction: { mode: 'index', intersect: false },
       layout: { padding: { right: 7 } },
-      plugins: { legend: { display: false }, tooltip: { ...tooltip, callbacks: { label: ({ raw }) => format(raw) } } },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          ...tooltip,
+          animations: { numbers: { duration: 240, easing: 'easeOutCubic' } },
+          callbacks: { label: ({ raw }) => format(raw) },
+        },
+      },
       scales: {
         x: {
           grid: { display: false }, border: { color: '#353743' },
