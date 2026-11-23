@@ -6,8 +6,25 @@ const title = dialog.querySelector('#dialog-title');
 const content = dialog.querySelector('#dialog-content');
 let panel = 0;
 let opener;
+let dismissOnBackdrop = false;
+let backdropPress = false;
 
-dialog.querySelector('#dialog-close').addEventListener('click', () => dialog.close());
+function isBackdrop(event) {
+  if (event.target !== dialog) return false;
+  const { left, right, top, bottom } = dialog.getBoundingClientRect();
+  return event.clientX < left || event.clientX >= right || event.clientY < top || event.clientY >= bottom;
+}
+
+dialog.querySelector('#dialog-close').addEventListener('click', closeDialog);
+dialog.addEventListener('pointerdown', (event) => {
+  backdropPress = event.isPrimary && event.button === 0 && isBackdrop(event);
+});
+dialog.addEventListener('pointercancel', () => { backdropPress = false; });
+dialog.addEventListener('click', (event) => {
+  const shouldDismiss = dismissOnBackdrop && backdropPress && event.detail > 0 && isBackdrop(event);
+  backdropPress = false;
+  if (shouldDismiss) closeDialog();
+});
 dialog.addEventListener('close', () => {
   if (dialog.open) return;
   panel++;
@@ -18,8 +35,10 @@ export function closeDialog() {
   if (dialog.open) dialog.close();
 }
 
-export function openDialog(heading, html) {
+export function openDialog(heading, html, { backdrop = true } = {}) {
   const id = ++panel;
+  dismissOnBackdrop = backdrop;
+  backdropPress = false;
   title.textContent = heading;
   content.innerHTML = html;
   if (!dialog.open) {
@@ -76,7 +95,7 @@ export function editView(heading, fields, submitLabel = 'Сохранить') {
   return openDialog(heading, `<form><div class="form-grid">${fields}</div>
     <p class="form-error" role="alert" hidden></p>
     <div class="form-actions"><button type="button" class="button" data-cancel>Отмена</button>
-    <button type="submit" class="button primary">${submitLabel}</button></div></form>`);
+    <button type="submit" class="button primary">${submitLabel}</button></div></form>`, { backdrop: false });
 }
 
 export function formError(form, message) {
