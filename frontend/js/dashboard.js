@@ -1,5 +1,5 @@
 import { api } from './api.js';
-import { compactMoney, date, escape, icon, money, number, setAppDate, today } from './ui.js';
+import { compactMoney, date, escape, icon, money, number, reveal, setAppDate, today } from './ui.js';
 
 const modes = {
   income: { name: 'Доходы от имущества', icon: 'income', trend: 'Динамика доходов', structure: 'Структура доходов', color: '#f0cb75', financial: true },
@@ -13,6 +13,12 @@ const percent = new Intl.NumberFormat('ru-RU', { style: 'percent', maximumFracti
 let selected = 'income';
 let financialPeriod = 'last12';
 let financialYear = Number(today().slice(0, 4));
+let cachedDashboard;
+const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+
+function dashboardParams() {
+  return { period: financialPeriod, year: financialPeriod === 'year' ? financialYear : null };
+}
 
 export function mountDashboard(root) {
   root.innerHTML = `
@@ -25,6 +31,7 @@ export function mountDashboard(root) {
         <label class="year-control" hidden><span>Год</span><input name="year" type="number" step="1" min="1" value="${financialYear}" max="${today().slice(0, 4)}" required></label>
       </form>
     </header>
+    <div class="dashboard-data is-pending">
     <div class="kpi-grid" role="group" aria-label="Показатели дашборда">
       ${Object.entries(modes).map(([key, mode]) => `
         <button type="button" class="kpi" data-mode="${key}" aria-pressed="${selected === key}" aria-controls="analytics">
@@ -53,19 +60,23 @@ export function mountDashboard(root) {
           <ul class="legend"></ul>
         </div>
       </section>
+    </div>
     </div>`;
 
   const form = root.querySelector('form');
   const period = form.elements.period;
   const year = form.elements.year;
   const message = root.querySelector('.live-message');
+  const dashboardData = root.querySelector('.dashboard-data');
   const analytics = root.querySelector('#analytics');
   const cards = [...root.querySelectorAll('.kpi')];
   let controller;
-  let data;
+  let data = cachedDashboard?.key === JSON.stringify(dashboardParams()) ? cachedDashboard.payload : null;
   let charts = [];
+  let trendReveal;
 
   function clearCharts() {
+    trendReveal?.cancel();
     charts.forEach((chart) => chart.destroy());
     charts = [];
   }
@@ -123,6 +134,12 @@ export function mountDashboard(root) {
       trendCanvas.setAttribute('aria-label', `${mode.trend}. ${panel.trend.map(({ label, value }) => `${label}, ${format(value)}`).join('; ')}.`);
       const chart = new Chart(trendCanvas, trendConfig(mode, panel.trend, format));
       charts.push(chart);
+      if (!reducedMotion.matches) {
+        trendReveal = trendCanvas.animate(
+          { clipPath: ['inset(0 100% 0 0)', 'inset(0 0 0 0)'] },
+          { duration: 620, easing: 'cubic-bezier(.25, .65, .35, 1)' },
+        );
+      }
     }
     if (total) {
       const totalLabel = mode.financial ? compactMoney(total) : number(total);
@@ -156,32 +173,34 @@ export function mountDashboard(root) {
     controller?.abort();
     controller = new AbortController();
     const { signal } = controller;
+    const params = dashboardParams();
+    const key = JSON.stringify(params);
     analytics.setAttribute('aria-busy', 'true');
-    showMessage('Загрузка показателей…');
+    if (!data) showMessage('Загрузка показателей…');
     try {
-      const payload = await api('dashboard', { params: { period: financialPeriod, year: financialPeriod === 'year' ? financialYear : null }, signal });
+      const payload = await api('dashboard', { params, signal });
       if (signal.aborted) return;
-      data = payload;
-      setAppDate(data.as_of);
-      fillCards();
       if (!window.Chart) throw new Error('Не удалось загрузить Chart.js.');
-      render();
+      const changed = JSON.stringify(data) !== JSON.stringify(payload);
+      data = payload;
+      cachedDashboard = { key, payload };
+      setAppDate(data.as_of);
+      if (changed) showData();
       showMessage('');
     } catch (error) {
       if (signal.aborted) return;
-      data = null;
-      fillCards();
-      render();
-      showMessage(error.message, true);
+      showMessage(data ? `${error.message} Показаны последние полученные данные.` : error.message, true);
     } finally {
       if (!signal.aborted) analytics.setAttribute('aria-busy', 'false');
     }
   }
 
   cards.forEach((card) => card.addEventListener('click', () => {
+    if (selected === card.dataset.mode) return;
     selected = card.dataset.mode;
     for (const candidate of cards) candidate.setAttribute('aria-pressed', String(candidate === card));
     render();
+    reveal(analytics, { duration: 360, offset: 0 });
   }));
 
   period.value = financialPeriod;
@@ -193,15 +212,22 @@ export function mountDashboard(root) {
   function changePeriod() {
     year.closest('label').hidden = period.value !== 'year';
     if (period.value === 'year' && !year.reportValidity()) return;
+    const previousKey = JSON.stringify(dashboardParams());
     financialPeriod = period.value;
     if (financialPeriod === 'year') financialYear = year.valueAsNumber;
+    if (previousKey === JSON.stringify(dashboardParams())) return;
     data = null;
-    fillCards();
-    render();
+    showData();
     load();
   }
 
-  render();
+  function showData() {
+    dashboardData.classList.toggle('is-pending', !data);
+    fillCards();
+    render();
+  }
+
+  showData();
   load();
   return () => { controller?.abort(); clearCharts(); };
 }
@@ -210,8 +236,6 @@ function dateRange(data) {
   return data.period_start ? `${date(data.period_start)} — ${date(data.period_end)}` : `До ${date(data.period_end)}`;
 }
 
-const noAnimation = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-const animation = noAnimation ? false : { duration: 260 };
 const tooltip = { backgroundColor: '#2a2c34', titleColor: '#f2f1ef', bodyColor: '#f2f1ef', padding: 12 };
 
 function trendConfig(mode, points, format) {
@@ -236,7 +260,7 @@ function trendConfig(mode, points, format) {
       }],
     },
     options: {
-      responsive: true, maintainAspectRatio: false, animation, interaction: { mode: 'index', intersect: false },
+      responsive: true, maintainAspectRatio: false, animation: false, interaction: { mode: 'index', intersect: false },
       layout: { padding: { right: 7 } },
       plugins: { legend: { display: false }, tooltip: { ...tooltip, callbacks: { label: ({ raw }) => format(raw) } } },
       scales: {
@@ -309,7 +333,9 @@ function breakdownConfig(points, format, total, totalLabel) {
       }],
     },
     options: {
-      responsive: true, maintainAspectRatio: false, cutout: '73%', animation, layout: { padding: 5 },
+      responsive: true, maintainAspectRatio: false, cutout: '73%',
+      animation: reducedMotion.matches ? false : { duration: 620, easing: 'easeOutCubic' },
+      layout: { padding: 5 },
       plugins: {
         legend: { display: false },
         tooltip: {

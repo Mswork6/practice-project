@@ -118,6 +118,9 @@ textarea { resize: vertical; min-height: 96px; }
 .legend-dot { width: 9px; height: 9px; border-radius: 3px; }
 .live-message { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; padding: 12px 15px; border: 1px solid var(--line); background: var(--raised); border-radius: 8px; color: var(--soft); margin-top: 15px; }
 .live-message.error { border-color: #6d424a; color: var(--red); }
+.dashboard-data { position: relative; }
+.dashboard-data.is-pending :is(.kpi-grid, .analytics) { visibility: hidden; }
+.dashboard-data.is-pending .live-message { position: absolute; inset: 0 0 auto; margin-top: 0; }
 .button, .icon-button { border: 1px solid #3b3d48; color: var(--ink); background: #252731; border-radius: 8px; display: inline-flex; justify-content: center; align-items: center; min-height: 42px; padding: 8px 14px; gap: 8px; font-weight: 650; font-size: .91rem; white-space: nowrap; }
 .button:hover:not(:disabled), .icon-button:hover:not(:disabled) { background: #30323e; border-color: #626474; }
 .button.primary { background: var(--gold); border-color: var(--gold); color: #231b10; }
