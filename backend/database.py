@@ -1,0 +1,38 @@
+from collections.abc import Iterator
+from functools import cache
+from typing import Annotated
+
+from fastapi import Depends, HTTPException
+from sqlalchemy import create_engine
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
+
+from .config import database_url
+
+
+@cache
+def get_engine():
+    return create_engine(
+        database_url(),
+        pool_pre_ping=True,
+        isolation_level="READ COMMITTED",
+        connect_args={"connect_timeout": 5},
+    )
+
+
+def get_db() -> Iterator[Session]:
+    with Session(get_engine(), expire_on_commit=False) as db:
+        yield db
+
+
+Db = Annotated[Session, Depends(get_db)]
+
+
+def commit(db: Session, conflict: str) -> None:
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        if exc.orig.sqlstate in {"23503", "23505"}:
+            raise HTTPException(409, conflict) from None
+        raise
