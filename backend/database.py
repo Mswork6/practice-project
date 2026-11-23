@@ -35,4 +35,6 @@ def commit(db: Session, conflict: str) -> None:
         db.rollback()
         if exc.orig.sqlstate in {"23503", "23505"}:
             raise HTTPException(409, conflict) from None
+        if exc.orig.sqlstate == "23514":
+            raise HTTPException(422, "Проверьте значения полей и согласованность дат.") from None
         raise

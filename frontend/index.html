@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Муниципальное имущество</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/css/styles.css">
+  <script defer src="/static/vendor/chart.umd.min.js"></script>
+  <script type="module" src="/static/js/main.js"></script>
+</head>
+<body>
+  <a class="skip" href="#content">К содержимому</a>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a class="brand" href="#dashboard">
+        <span class="brand-icon" data-icon="building"></span>
+        <span>Муниципальное<br>имущество</span>
+      </a>
+      <nav class="navigation" aria-label="Разделы приложения">
+        <a href="#dashboard" data-route="dashboard"><span data-icon="dashboard"></span>Дашборд</a>
+        <a href="#properties" data-route="properties"><span data-icon="building"></span>Объекты</a>
+        <a href="#contracts" data-route="contracts"><span data-icon="contract"></span>Договоры</a>
+        <a href="#finance" data-route="finance"><span data-icon="wallet"></span>Финансы</a>
+      </nav>
+      <div class="clock" id="app-date" hidden><span data-icon="calendar"></span><time></time></div>
+    </div>
+  </header>
+  <main id="content" class="shell" tabindex="-1"></main>
+  <dialog id="dialog" aria-labelledby="dialog-title">
+    <div class="dialog-header">
+      <h2 id="dialog-title"></h2>
+      <button id="dialog-close" type="button" class="icon-button" aria-label="Закрыть"><span data-icon="close"></span></button>
+    </div>
+    <div id="dialog-content" class="dialog-content"></div>
+  </dialog>
+  <div id="notice" role="status" class="notice" hidden></div>
+  <noscript><p class="shell">Включите JavaScript, чтобы пользоваться реестрами и дашбордом.</p></noscript>
+</body>
+</html>
