@@ -1,7 +1,7 @@
 import { api } from './api.js';
 import { bindForm, confirmDelete, dialogError, editView, field, fieldsTable, noteField, openDialog, relatedTable, selectField } from './dialog.js';
 import { recordButton } from './registry.js';
-import { badge, contractStatuses, date, escape, notify, number, propertyStatuses, propertyTypes } from './ui.js';
+import { badge, contractStates, date, escape, notify, number, propertyStatuses, propertyTypes } from './ui.js';
 import { contractDetail } from './contracts.js';
 
 const endpoint = 'properties';
@@ -11,7 +11,7 @@ function edit(record, reload) {
   const view = editView(record ? 'Редактирование объекта' : 'Новый объект', `
     ${field('name', 'Наименование', record?.name, 'required maxlength="200" autofocus', true)}
     ${selectField('type', 'Категория', propertyTypes, record?.type)}
-    ${selectField('status', 'Статус', propertyStatuses, record?.status)}
+    <p class="lookup-hint">${record ? `Статус — ${propertyStatuses[record.status]}. ` : ''}Использование определяется автоматически по действующей аренде.</p>
     ${field('address', 'Адрес', record?.address, 'required maxlength="300"', true)}
     ${field('area', 'Площадь, м²', record?.area, 'type="number" min="0.01" step="0.01"')}
     ${field('cadastral_number', 'Кадастровый номер', record?.cadastral_number, 'maxlength="80"')}
@@ -31,28 +31,32 @@ async function detail(id, reload) {
     const html = `
       ${fieldsTable([
         ['ID', record.id], ['Дата внесения', date(record.created_at)], ['Адрес', record.address, true],
-        ['Категория', propertyTypes[record.type]], ['Статус', propertyStatuses[record.status]],
+        ['Категория', propertyTypes[record.type]], ['Статус', record.status === 'archived' ? 'Архивирован' : `${propertyStatuses[record.status]} · автоматически`],
         ['Площадь', area(record.area)], ['Кадастровый номер', record.cadastral_number],
         ['Примечание', record.note, true],
       ])}
       <section class="related"><h3>Договоры объекта</h3><div data-related></div></section>
       <div class="detail-actions">
-        ${record.status !== 'archived' ? '<button type="button" class="button" data-archive>Архивировать</button>' : ''}
+        ${record.status === 'archived' ? '<button type="button" class="button" data-archive>Восстановить</button>' :
+          `<button type="button" class="button" data-archive${record.can_archive ? '' : ' disabled'}>Архивировать</button>`}
         <button type="button" class="button danger" data-delete>Удалить</button>
         <button type="button" class="button primary" data-edit>Редактировать</button>
-      </div>`;
+      </div>
+      ${record.status !== 'archived' && !record.can_archive ?
+        '<p class="form-error">Архивирование доступно после окончания действующих и ожидающих начала договоров.</p>' : ''}`;
     if (!view.set(record.name, html)) return;
     relatedTable(view.content.querySelector('[data-related]'), {
       endpoint: 'contracts', params: { property_id: id }, columns: ['Номер', 'Статус', 'Окончание'],
-      renderRow: (item) => `<tr><td>${recordButton(item, item.number)}</td><td>${escape(contractStatuses[item.status])}</td><td class="number">${date(item.end_date)}</td></tr>`,
+      renderRow: (item) => `<tr><td>${recordButton(item, item.number)}</td><td>${escape(contractStates[item.state])}</td><td class="number">${date(item.end_date)}</td></tr>`,
       empty: 'У объекта пока нет договоров.', onClick: (contractId) => contractDetail(contractId, reload),
     });
     view.content.querySelector('[data-archive]')?.addEventListener('click', async (event) => {
       const button = event.currentTarget;
       button.disabled = true;
       try {
-        await api(`${endpoint}/${id}`, { method: 'PATCH', data: { status: 'archived' } });
-        notify('Объект перемещён в архив.');
+        const restore = record.status === 'archived';
+        await api(`${endpoint}/${id}`, { method: 'PATCH', data: { status: restore ? 'available' : 'archived' } });
+        notify(restore ? 'Объект восстановлен.' : 'Объект перемещён в архив.');
         reload();
         view.close();
       } catch (error) {

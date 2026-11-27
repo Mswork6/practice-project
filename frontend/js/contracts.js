@@ -1,11 +1,12 @@
 import { api } from './api.js';
 import { bindForm, bindLookup, confirmDelete, dialogError, editView, field, fieldsTable, lookup, noteField, openDialog, selectField } from './dialog.js';
 import { recordButton } from './registry.js';
-import { badge, contractStatuses, contractTypes, date, escape, money, notify, today } from './ui.js';
+import { badge, contractStates, contractStatuses, contractTypes, date, escape, money, notify, today } from './ui.js';
 
 const endpoint = 'contracts';
 
 function term(record) {
+  if (record.state !== 'active') return ['—', ''];
   if (record.days_remaining == null) return ['Без даты', ''];
   if (record.days_remaining < 0) return ['Срок истёк', 'negative'];
   if (record.days_remaining === 0) return ['Истекает сегодня', 'attention'];
@@ -66,7 +67,7 @@ function edit(record, reload) {
     ${field('start_date', 'Дата начала', record?.start_date ?? today(), 'type="date" required')}
     ${field('end_date', 'Дата окончания', record?.end_date, 'type="date"')}
     ${field('amount', 'Сумма по договору, ₽', record?.amount, 'type="number" min="0.01" step="0.01"')}
-    ${selectField('status', 'Статус', contractStatuses, record?.status)}
+    ${selectField('status', 'Статус записи', contractStatuses, record?.status)}
     ${noteField('note', 'Примечание', record?.note)}`);
   const form = bindForm(view, async (values) => {
     const data = Object.fromEntries([...values].map(([key, value]) => [key, value.trim() || null]));
@@ -74,8 +75,12 @@ function edit(record, reload) {
     notify(record ? 'Договор обновлён.' : 'Договор добавлен.');
     reload();
   });
-  bindLookup(form, 'property_id', 'properties', (item) => item.address ? `${item.name} · ${item.address}` : item.name,
-    record && { id: record.property_id, name: record.property_name });
+  const linkedProperty = record && {
+    id: record.property_id, name: record.property_name, status: record.property_archived ? 'archived' : null,
+  };
+  const refreshProperties = bindLookup(form, 'property_id', 'properties',
+    (item) => [item.name, item.address, item.status === 'archived' ? 'архив' : ''].filter(Boolean).join(' · '),
+    linkedProperty, () => ({ exclude_archived: true, contract_type: form.elements.type.value }));
   const choose = bindLookup(form, 'counterparty_id', 'counterparties', (item) => item.tax_id ? `${item.name} · ИНН ${item.tax_id}` : item.name,
     record && { id: record.counterparty_id, name: record.counterparty_name });
   addCounterparty(form, choose);
@@ -84,7 +89,10 @@ function edit(record, reload) {
     form.elements.end_date.min = form.elements.start_date.value;
   }
   updateEndDate();
-  form.elements.type.addEventListener('change', updateEndDate);
+  form.elements.type.addEventListener('change', () => {
+    updateEndDate();
+    refreshProperties(record?.property_archived || form.elements.type.value === record?.type ? linkedProperty : null);
+  });
   form.elements.start_date.addEventListener('change', updateEndDate);
 }
 
@@ -94,9 +102,11 @@ export async function contractDetail(id, reload) {
     const record = await api(`${endpoint}/${id}`);
     const html = `
       ${fieldsTable([
-        ['ID', record.id], ['Тип', contractTypes[record.type]], ['Объект', record.property_name],
+        ['ID', record.id], ['Тип', contractTypes[record.type]],
+        ['Объект', record.property_archived ? `${record.property_name} · архив` : record.property_name],
         ['Контрагент', record.counterparty_name], ['Дата начала', date(record.start_date)],
-        ['Дата окончания', date(record.end_date)], ['Статус', contractStatuses[record.status]],
+        ['Дата окончания', date(record.end_date)], ['Состояние', contractStates[record.state]],
+        ['Статус записи', contractStatuses[record.status]],
         ['Осталось', term(record)[0]], ['Сумма', record.amount == null ? '—' : money(record.amount)],
         ['Примечание', record.note, true],
       ])}
@@ -119,15 +129,15 @@ export async function contractDetail(id, reload) {
 export const contracts = {
   title: 'Реестр договоров', subtitle: 'Договоры, контрагенты и сроки окончания',
   addLabel: 'Добавить договор', searchHint: 'Номер, объект или контрагент', endpoint,
-  filters: [['type', 'Тип договора', contractTypes, 'Все типы'], ['status', 'Статус', contractStatuses, 'Все статусы']],
-  columns: ['Договор', 'Контрагент', 'Окончание', 'Осталось', 'Сумма', 'Статус'],
+  filters: [['type', 'Тип договора', contractTypes, 'Все типы'], ['state', 'Состояние', contractStates, 'Все состояния']],
+  columns: ['Договор', 'Контрагент', 'Окончание', 'Осталось', 'Сумма', 'Состояние'],
   renderRow(item) {
-    const tone = item.status === 'active' ? 'positive' : item.status === 'terminated' ? 'negative' : '';
+    const tone = { active: 'positive', pending: 'attention', expired: 'negative', terminated: 'negative' }[item.state] ?? '';
     return `<tr><td>${recordButton(item, item.number)}
       <span class="secondary">${escape(contractTypes[item.type])} · ${escape(item.property_name)}</span></td>
       <td>${escape(item.counterparty_name)}</td><td class="number">${date(item.end_date)}</td>
       <td>${badge(...term(item))}</td><td class="number">${item.amount == null ? '—' : money(item.amount)}</td>
-      <td>${badge(contractStatuses[item.status], tone)}</td></tr>`;
+      <td>${badge(contractStates[item.state], tone)}</td></tr>`;
   },
   edit, detail: contractDetail,
 };

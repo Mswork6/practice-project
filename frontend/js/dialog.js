@@ -174,7 +174,7 @@ export function lookup(name, label, searchHint) {
   </div>`;
 }
 
-export function bindLookup(form, name, endpoint, label, current) {
+export function bindLookup(form, name, endpoint, label, current, filters = () => ({})) {
   const group = form.querySelector(`[data-lookup="${name}"]`);
   const search = group.querySelector('input');
   const select = group.querySelector('select');
@@ -184,7 +184,7 @@ export function bindLookup(form, name, endpoint, label, current) {
 
   function populate(items, selected) {
     const choices = Object.fromEntries(items.map((item) => [item.id, label(item)]));
-    if (retained) choices[retained.id] = label(retained);
+    if (retained && !Object.hasOwn(choices, retained.id)) choices[retained.id] = label(retained);
     select.innerHTML = options(choices, selected, 'Выберите из списка');
     select.value = selected || '';
   }
@@ -195,7 +195,9 @@ export function bindLookup(form, name, endpoint, label, current) {
     const { signal } = request;
     hint.textContent = 'Поиск…';
     try {
-      const { items, total } = await api(endpoint, { params: { search: search.value, page_size: 30 }, signal });
+      const { items, total } = await api(endpoint, {
+        params: { search: search.value, page_size: 30, ...filters() }, signal,
+      });
       if (signal.aborted || !group.isConnected) return;
       populate(items, select.value);
       hint.textContent = total === 0 ? 'Ничего не найдено' : total > items.length ? 'Уточните поиск, чтобы увидеть другие записи' : '';
@@ -214,10 +216,10 @@ export function bindLookup(form, name, endpoint, label, current) {
   populate([], retained?.id);
   search.addEventListener('input', debounce(load));
   load();
-  return (item) => {
+  return (item = null) => {
     retained = item;
     search.value = '';
-    populate([], item.id);
+    populate([], item?.id);
     load();
   };
 }

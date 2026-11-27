@@ -106,13 +106,13 @@ export function mountDashboard(root) {
       income: dateRange(data),
       debt: 'На конец месяца · текущий месяц на дату среза',
       properties: 'Последние 12 календарных месяцев',
-      renewals: `${date(data.contract_start)} — ${date(data.contract_end)} · все статусы`,
+      renewals: `${date(data.contract_start)} — ${date(data.contract_end)} · действующие договоры`,
     }[selected] : '';
     root.querySelector('#structure-subtitle').textContent = data ? {
       income: dateRange(data),
       debt: `Просрочка на ${date(data.as_of)}`,
       properties: `Актуальные объекты на ${date(data.as_of)}`,
-      renewals: `Действующие договоры на ${date(data.as_of)}`,
+      renewals: `Действующие договоры на ${date(data.as_of)} · KPI включает сроки до 180 дней`,
     }[selected] : '';
 
     const trendCanvas = root.querySelector('#trend-chart');
