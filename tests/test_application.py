@@ -91,7 +91,7 @@ def test_full_workflow_and_persistence(client, engine):
     assert client.delete(property_url).status_code == 409
     assert client.delete(f"/api/contracts/{agreement['id']}").status_code == 409
     assert client.patch(property_url, json={"status": "archived"}).status_code == 409
-    assert client.patch(f"/api/contracts/{agreement['id']}", json={"status": "completed"}).status_code == 200
+    assert client.post(f"/api/contracts/{agreement['id']}/complete").status_code == 200
     assert client.patch(property_url, json={"status": "archived"}).status_code == 200
     assert chart(client)["kpis"]["properties"] == 0
 
@@ -142,8 +142,10 @@ def test_term_windows_and_category_labels(client):
             **base, "number": f"ГРАНИЦА-{days}", "end_date": (AS_OF + timedelta(days=days)).isoformat(),
         })
         assert result["days_remaining"] == days
-    create(client, "contracts", {**base, "number": "ЗАВЕРШЁН", "status": "completed"})
-    create(client, "contracts", {**base, "number": "РАСТОРГНУТ", "status": "terminated"})
+    completed = create(client, "contracts", {**base, "number": "ЗАВЕРШЁН"})
+    terminated = create(client, "contracts", {**base, "number": "РАСТОРГНУТ"})
+    assert client.post(f"/api/contracts/{completed['id']}/complete").status_code == 200
+    assert client.post(f"/api/contracts/{terminated['id']}/terminate").status_code == 200
     create(client, "contracts", {**base, "number": "ЕЩЁ НЕ НАЧАЛСЯ", "start_date": "2026-11-24"})
     create(client, "contracts", {**base, "number": "ПРОДАЖА", "type": "sale", "end_date": None})
 
@@ -182,7 +184,8 @@ def test_registry_search_filters_patch_delete(client):
     assert client.get("/api/contracts", params={"property_id": body["property_id"]}).json()["total"] == 1
     contract_url = f"/api/contracts/{agreement['id']}"
     assert client.patch(contract_url, json={"end_date": None}).status_code == 422
-    assert client.patch(contract_url, json={"status": "terminated", "number": "НОВЫЙ"}).json()["number"] == "НОВЫЙ"
+    assert client.patch(contract_url, json={"number": "НОВЫЙ"}).json()["number"] == "НОВЫЙ"
+    assert client.post(f"{contract_url}/terminate").json()["number"] == "НОВЫЙ"
     assert client.delete(contract_url).status_code == 204
     assert client.delete(f"/api/properties/{body['property_id']}").status_code == 204
 

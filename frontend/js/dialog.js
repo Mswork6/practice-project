@@ -126,11 +126,15 @@ export function bindForm(view, onSubmit) {
   return form;
 }
 
-export function confirmDelete(message, onDelete) {
-  const view = editView('Подтверждение удаления', `
-    <div class="confirmation full-width"><p>${escape(message)}</p></div>`, 'Удалить');
-  const form = bindForm(view, onDelete);
+export function confirmAction(heading, message, label, submit) {
+  const view = editView(heading, `
+    <div class="confirmation full-width"><p>${escape(message)}</p></div>`, label);
+  const form = bindForm(view, submit);
   form.querySelector('[data-cancel]').focus();
+}
+
+export function confirmDelete(message, onDelete) {
+  confirmAction('Подтверждение удаления', message, 'Удалить', onDelete);
 }
 
 export function relatedTable(container, { endpoint, params, columns, renderRow, empty, onClick }) {

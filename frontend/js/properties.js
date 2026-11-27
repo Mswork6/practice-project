@@ -31,7 +31,7 @@ async function detail(id, reload) {
     const html = `
       ${fieldsTable([
         ['ID', record.id], ['Дата внесения', date(record.created_at)], ['Адрес', record.address, true],
-        ['Категория', propertyTypes[record.type]], ['Статус', record.status === 'archived' ? 'Архивирован' : `${propertyStatuses[record.status]} · автоматически`],
+        ['Категория', propertyTypes[record.type]], ['Статус', propertyStatuses[record.status]],
         ['Площадь', area(record.area)], ['Кадастровый номер', record.cadastral_number],
         ['Примечание', record.note, true],
       ])}
@@ -46,7 +46,7 @@ async function detail(id, reload) {
         '<p class="form-error">Архивирование доступно после окончания действующих и ожидающих начала договоров.</p>' : ''}`;
     if (!view.set(record.name, html)) return;
     relatedTable(view.content.querySelector('[data-related]'), {
-      endpoint: 'contracts', params: { property_id: id }, columns: ['Номер', 'Статус', 'Окончание'],
+      endpoint: 'contracts', params: { property_id: id }, columns: ['Номер', 'Статус договора', 'Окончание'],
       renderRow: (item) => `<tr><td>${recordButton(item, item.number)}</td><td>${escape(contractStates[item.state])}</td><td class="number">${date(item.end_date)}</td></tr>`,
       empty: 'У объекта пока нет договоров.', onClick: (contractId) => contractDetail(contractId, reload),
     });

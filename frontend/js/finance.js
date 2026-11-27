@@ -39,7 +39,7 @@ function addPayment(record, reload) {
   });
 }
 
-async function detail(id, reload) {
+export async function accrualDetail(id, reload) {
   const view = openDialog('Карточка начисления', '<p role="status">Загрузка…</p>');
   try {
     const record = await api(`${endpoint}/${id}`);
@@ -91,5 +91,5 @@ export const finance = {
       <td class="number">${money(item.paid)}</td><td class="number">${money(item.remaining)}</td>
       <td class="number">${Number(item.overdue) > 0 ? badge(money(item.overdue), 'negative') : '—'}</td></tr>`;
   },
-  edit, detail,
+  edit, detail: accrualDetail,
 };

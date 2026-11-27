@@ -4,7 +4,7 @@ from sqlalchemy import Date, literal, or_, select
 from ..config import local_today
 from ..database import Db, commit
 from ..models import Contract, ContractStatus, ContractType, Counterparty, Property, PropertyStatus, PropertyType
-from ..schemas import ContractIn, ContractOut, ContractPatch, CounterpartyIn, CounterpartyOut, Id
+from ..schemas import ContractExtension, ContractIn, ContractOut, ContractPatch, CounterpartyIn, CounterpartyOut, Id
 from ..schemas import Page, PropertyIn, PropertyOut, PropertyPatch
 from ..services.registry import (
     OPEN_STATES, RENTAL_OBJECT_TYPES, ContractState, compatible, contract_state, property_contracts, property_status,
@@ -141,7 +141,7 @@ def contract_query(today):
 def contract_view(record, property_name, counterparty_name, state, property_status, today):
     values = ContractIn.model_validate(record).model_dump()
     return ContractOut(
-        **values, id=record.id, property_name=property_name, counterparty_name=counterparty_name,
+        **values, id=record.id, status=record.status, property_name=property_name, counterparty_name=counterparty_name,
         days_remaining=(record.end_date - today).days if record.end_date else None,
         state=state, property_archived=property_status == PropertyStatus.ARCHIVED,
     )
@@ -182,19 +182,21 @@ def load_contract(db, id, today):
     return contract_view(*row, today)
 
 
-def save_contract(db, record, values):
+def proposed_contract_state(db, status, values, today):
+    return db.scalar(select(contract_state(
+        today, literal(status), literal(values["start_date"], Date), literal(values["end_date"], Date),
+    )))
+
+
+def validate_contract_assignment(db, record, values, today):
     # Serialize contract assignment and scheduling with changes to the target property.
     prop = require(db, Property, values["property_id"], "Связанный объект не найден.", lock=True)
-    today = local_today()
     changed_property = record.property_id != prop.id
-    changed_schedule = any(getattr(record, key) != values[key] for key in ("status", "start_date", "end_date"))
+    changed_schedule = any(getattr(record, key) != values[key] for key in ("start_date", "end_date"))
     incompatible = not compatible(values["type"], prop.type)
     scheduled = False
     if changed_schedule and (prop.status == PropertyStatus.ARCHIVED or incompatible):
-        state = db.scalar(select(contract_state(
-            today, literal(values["status"]), literal(values["start_date"], Date), literal(values["end_date"], Date),
-        )))
-        scheduled = state in OPEN_STATES
+        scheduled = proposed_contract_state(db, record.status, values, today) in OPEN_STATES
     if prop.status == PropertyStatus.ARCHIVED:
         if changed_property:
             raise HTTPException(409, "Нельзя назначить архивированный объект новому или перенесённому договору.")
@@ -203,26 +205,116 @@ def save_contract(db, record, values):
     if incompatible and (changed_property or record.type != values["type"] or scheduled):
         raise HTTPException(422, "Аренда земли доступна для участков, аренда недвижимости — для зданий и нежилых помещений.")
     require(db, Counterparty, values["counterparty_id"], "Контрагент не найден.")
+
+
+def prepare_contract(db, record, values, today):
+    validate_contract_assignment(db, record, values, today)
     for key, value in values.items():
         setattr(record, key, value)
     db.add(record)
+
+
+def persist_contract(db, record, today):
     commit(db, "Номер договора уже используется или связанная запись была удалена.")
     return load_contract(db, record.id, today)
 
 
+def locked_contract(db, id, today):
+    record = require(db, Contract, id, "Договор не найден.", lock=True)
+    state = db.scalar(select(contract_state(today)).where(Contract.id == id))
+    return record, state
+
+
 @router.post("/contracts", response_model=ContractOut, status_code=201)
 def create_contract(data: ContractIn, db: Db):
-    return save_contract(db, Contract(), data.model_dump())
+    today = local_today()
+    record = Contract(status=ContractStatus.ACTIVE)
+    prepare_contract(db, record, data.model_dump(), today)
+    return persist_contract(db, record, today)
 
 
 @router.patch("/contracts/{id}", response_model=ContractOut)
 def update_contract(id: Id, data: ContractPatch, db: Db):
-    record = require(db, Contract, id, "Договор не найден.", lock=True)
-    return save_contract(db, record, merge(ContractIn, record, data))
+    today = local_today()
+    record, state = locked_contract(db, id, today)
+    if state not in OPEN_STATES and state != ContractState.EXPIRED:
+        raise HTTPException(409, "Завершённый или расторгнутый договор нельзя редактировать.")
+
+    values = merge(ContractIn, record, data)
+    if state == ContractState.EXPIRED:
+        if data.model_fields_set - {"note"}:
+            raise HTTPException(409, "В договоре с истёкшим сроком можно изменить только примечание.")
+        record.note = values["note"]
+    else:
+        if state == ContractState.ACTIVE:
+            end = values["end_date"]
+            if record.end_date is not None and (end is None or end > record.end_date):
+                raise HTTPException(409, "Увеличить срок действующей аренды можно через действие «Продлить».")
+            if proposed_contract_state(db, record.status, values, today) != ContractState.ACTIVE:
+                raise HTTPException(409, "Изменённые даты должны оставлять договор действующим на сегодня.")
+        prepare_contract(db, record, values, today)
+    return persist_contract(db, record, today)
+
+
+@router.post("/contracts/{id}/complete", response_model=ContractOut)
+def complete_contract(id: Id, db: Db):
+    today = local_today()
+    record, state = locked_contract(db, id, today)
+    if state not in (ContractState.ACTIVE, ContractState.EXPIRED):
+        raise HTTPException(409, "Завершить можно действующий договор или договор с истёкшим сроком.")
+    record.status = ContractStatus.COMPLETED
+    return persist_contract(db, record, today)
+
+
+@router.post("/contracts/{id}/terminate", response_model=ContractOut)
+def terminate_contract(id: Id, db: Db):
+    today = local_today()
+    record, state = locked_contract(db, id, today)
+    if state != ContractState.ACTIVE:
+        raise HTTPException(409, "Расторгнуть можно только действующий договор.")
+    record.status = ContractStatus.TERMINATED
+    return persist_contract(db, record, today)
+
+
+@router.post("/contracts/{id}/extend", response_model=ContractOut)
+def extend_contract(id: Id, data: ContractExtension, db: Db):
+    today = local_today()
+    record, state = locked_contract(db, id, today)
+    if state != ContractState.ACTIVE or record.type not in RENTAL_OBJECT_TYPES or record.end_date is None:
+        raise HTTPException(409, "Продлить можно только действующий договор аренды с датой окончания.")
+    if data.end_date <= record.end_date:
+        raise HTTPException(422, "Новая дата окончания должна быть позже текущей даты окончания договора.")
+    values = ContractIn.model_validate(record).model_dump()
+    validate_contract_assignment(db, record, {**values, "end_date": data.end_date}, today)
+    record.end_date = data.end_date
+    return persist_contract(db, record, today)
+
+
+@router.post("/contracts/{id}/successor", response_model=ContractOut, status_code=201)
+def create_successor(id: Id, data: ContractIn, db: Db):
+    today = local_today()
+    source, state = locked_contract(db, id, today)
+    if state in OPEN_STATES:
+        raise HTTPException(409, "Создать новый договор на основе можно после истечения срока, завершения или расторжения.")
+    if state == ContractState.EXPIRED and data.start_date <= source.end_date:
+        raise HTTPException(422, "Новый договор должен начинаться после даты окончания предыдущего.")
+
+    reference = f"На основе договора № {source.number}."
+    note = data.note or ""
+    if reference not in note:
+        note = f"{reference}\n{note}" if note else reference
+    if len(note) > 3000:
+        raise HTTPException(422, "Примечание вместе со ссылкой на предыдущий договор должно содержать не более 3000 символов.")
+
+    record = Contract(status=ContractStatus.ACTIVE)
+    prepare_contract(db, record, {**data.model_dump(), "note": note}, today)
+    if state == ContractState.EXPIRED:
+        source.status = ContractStatus.COMPLETED
+    return persist_contract(db, record, today)
 
 
 @router.delete("/contracts/{id}", status_code=204)
 def delete_contract(id: Id, db: Db):
-    db.delete(require(db, Contract, id, "Договор не найден."))
+    db.delete(require(db, Contract, id, "Договор не найден.", lock=True))
     commit(db, "У договора есть начисления. Удаление недоступно.")
     return Response(status_code=204)

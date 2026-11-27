@@ -41,15 +41,16 @@ def test_property_status_tracks_contract_lifecycle(client, monkeypatch):
     primary = create(client, "contracts", {**base, "number": "ДЕЙСТВУЮЩИЙ"})
     alternate = create(client, "contracts", {**base, "number": "ВТОРОЙ"})
     assert status(url) == "in_use"
-    assert client.patch(f"/api/contracts/{primary['id']}", json={"status": "completed"}).status_code == 200
+    assert client.post(f"/api/contracts/{primary['id']}/complete").status_code == 200
     assert status(url) == "in_use"
     alternate_url = f"/api/contracts/{alternate['id']}"
     second_url = f"/api/properties/{other['id']}"
     assert client.patch(alternate_url, json={"property_id": other["id"]}).status_code == 200
     assert [status(url), status(second_url)] == ["available", "in_use"]
-    assert client.patch(alternate_url, json={"status": "terminated"}).status_code == 200
+    assert client.post(f"{alternate_url}/terminate").status_code == 200
     assert status(second_url) == "available"
-    assert client.patch(alternate_url, json={"status": "active", "type": "other"}).status_code == 200
+    replacement = create(client, "contracts", {**base, "number": "ПРОЧИЙ", "property_id": other["id"], "type": "other"})
+    alternate_url = f"/api/contracts/{replacement['id']}"
     assert status(second_url) == "available"
     assert client.patch(alternate_url, json={"type": "real_estate_rent"}).status_code == 200
     assert status(second_url) == "in_use"
@@ -66,9 +67,12 @@ def test_property_status_tracks_contract_lifecycle(client, monkeypatch):
     ("terminated", -3, 12, "real_estate_rent", "terminated"),
     ("active", -3, None, "sale", "active"),
 ])
-def test_states_and_filters(client, status, start, end, kind, expected):
-    contract, _ = create_agreement(client, status=status, start_date=day(start),
+def test_states_and_filters(client, engine, status, start, end, kind, expected):
+    contract, _ = create_agreement(client, start_date=day(start),
                                    end_date=day(end) if end is not None else None, type=kind)
+    if status != "active":
+        with Session(engine) as db, db.begin():
+            db.get(Contract, contract["id"]).status = status
     assert client.get(f"/api/contracts/{contract['id']}").json()["state"] == expected
     item = client.get("/api/contracts", params={"state": expected, "page_size": 1}).json()
     assert item["total"] == 1 and item["items"][0]["state"] == expected
@@ -85,19 +89,21 @@ def test_archive_restrictions_and_restore(client):
     assert client.patch(related, json={"type": "sale", "start_date": day(), "end_date": None}).status_code == 200
     assert client.get(url).json()["status"] == "available"  # A sale blocks archiving without using the property.
     assert client.patch(url, json=archived).status_code == 409
-    assert client.patch(related, json={"status": "completed"}).status_code == 200
+    assert client.post(f"{related}/complete").status_code == 200
     assert client.patch(url, json=archived).json()["status"] == "archived"
     assert chart(client)["kpis"]["properties"] == 0
     assert client.post("/api/contracts", json={**base, "type": "sale"}).status_code == 409
     other, _ = create_agreement(client, number="ЧУЖОЙ")
     assert client.patch(f"/api/contracts/{other['id']}", json={"property_id": base["property_id"]}).status_code == 409
-    assert client.patch(related, json={"status": "active"}).status_code == 409
-    assert client.patch(related, json={"status": "active", "start_date": day(1)}).status_code == 409
-    assert client.patch(related, json={"note": "Исторические сведения"}).json()["property_archived"]
+    assert client.patch(related, json={"status": "active"}).status_code == 422
+    assert client.patch(related, json={"start_date": day(1)}).status_code == 409
+    assert client.get(related).json()["property_archived"]
+    replacement = {**base, "number": "ВОЗВРАТ", "start_date": day(), "end_date": day(10)}
+    assert client.post(f"{related}/successor", json=replacement).status_code == 409
     assert client.get("/api/properties", params={"exclude_archived": True}).json()["total"] == 1
     assert client.patch(url, json={"status": "available"}).json()["status"] == "available"
     assert chart(client)["kpis"]["properties"] == 2
-    assert client.patch(related, json={"status": "active", "type": "real_estate_rent", "end_date": day(10)}).status_code == 200
+    assert client.post(f"{related}/successor", json=replacement).status_code == 201
     assert client.get(url).json()["status"] == "in_use"
 
 
@@ -121,7 +127,7 @@ def test_rental_categories(client):
     assert client.patch(lease, json={"property_id": objects["building"]}).status_code == 422
     assert client.patch(lease, json={"type": "real_estate_rent"}).status_code == 422
     assert client.patch(land, json={"type": "building"}).status_code == 409
-    assert client.patch(lease, json={"status": "completed"}).status_code == 200
+    assert client.post(f"{lease}/complete").status_code == 200
     assert client.patch(land, json={"type": "building"}).status_code == 200
 
 
@@ -134,11 +140,12 @@ def test_legacy_archive_and_incompatible_contract_remain_readable(client, engine
     url = f"/api/contracts/{contract['id']}"
     assert client.get(url).json()["property_archived"]
     assert client.patch(url, json={"note": "Историческая запись"}).status_code == 200
-    assert client.patch(url, json={"end_date": day(120)}).status_code == 409
-    assert client.patch(url, json={"status": "completed"}).status_code == 200
+    assert client.post(f"{url}/extend", json={"end_date": day(120)}).status_code == 409
     assert client.patch(f"/api/properties/{body['property_id']}", json={"status": "available"}).status_code == 200
-    assert client.patch(url, json={"status": "active"}).status_code == 422
+    assert client.post(f"{url}/extend", json={"end_date": day(120)}).status_code == 422
     assert client.patch(url, json={"type": "land_rent"}).status_code == 200
+    assert client.post(f"{url}/complete").status_code == 200
+    assert client.patch(url, json={"status": "active"}).status_code == 422
 
 
 def test_accrual_edits_and_payment_boundaries(client):

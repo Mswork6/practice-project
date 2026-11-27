@@ -38,7 +38,6 @@ export function today() {
 export const propertyTypes = { building: 'Здание', land: 'Земельный участок', premises: 'Нежилое помещение', other: 'Прочее' };
 export const propertyStatuses = { available: 'Свободен', in_use: 'Используется', archived: 'Архивирован' };
 export const contractTypes = { real_estate_rent: 'Аренда недвижимости', land_rent: 'Аренда земли', sale: 'Продажа имущества', other: 'Прочие' };
-export const contractStatuses = { active: 'Действует', completed: 'Завершён', terminated: 'Расторгнут' };
 export const contractStates = { pending: 'Ожидает начала', active: 'Действует', expired: 'Срок истёк',
   completed: 'Завершён', terminated: 'Расторгнут' };
 export const badge = (label, tone = '') => `<span class="badge ${tone}">${escape(label)}</span>`;

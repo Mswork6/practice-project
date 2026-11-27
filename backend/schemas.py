@@ -59,7 +59,6 @@ class ContractPatch(Schema):
     start_date: date | None = None
     end_date: date | None = None
     amount: PositiveAmount | None = None
-    status: ContractStatus | None = None
     note: Annotated[str, StringConstraints(max_length=3000)] | None = None
 
 
@@ -69,7 +68,6 @@ class ContractIn(ContractPatch):
     property_id: Id
     counterparty_id: Id
     start_date: date
-    status: ContractStatus = ContractStatus.ACTIVE
 
     @model_validator(mode="after")
     def check_dates(self):
@@ -82,11 +80,16 @@ class ContractIn(ContractPatch):
 
 class ContractOut(ContractIn):
     id: Id
+    status: ContractStatus
     property_name: str
     counterparty_name: str
     days_remaining: int | None
     state: ContractState
     property_archived: bool
+
+
+class ContractExtension(Schema):
+    end_date: date
 
 
 class AccrualPatch(Schema):
