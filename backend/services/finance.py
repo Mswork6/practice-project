@@ -23,12 +23,25 @@ def overdue_balance(cutoff, *correlates):
     return func.greatest(ZERO, Accrual.amount - payments_through(cutoff, *correlates))
 
 
-def register_payment(db: Session, data: PaymentIn):
-    # Every writer locks the same accrual before reading its payments. At READ COMMITTED
-    # the following statement sees payments committed while this transaction waited.
-    accrual = db.scalar(select(Accrual).where(Accrual.id == data.accrual_id).with_for_update())
+def lock_accrual(db: Session, id: int):
+    # Payment, edit and delete all lock the same row before querying its payments.
+    accrual = db.get(Accrual, id, with_for_update=True)
     if accrual is None:
         raise HTTPException(404, "Начисление не найдено.")
+    return accrual
+
+
+def lock_unpaid_accrual(db: Session, id: int):
+    accrual = lock_accrual(db, id)
+    if db.scalar(select(Payment.id).where(Payment.accrual_id == id).limit(1)) is not None:
+        raise HTTPException(409, "Начисление с зарегистрированными платежами нельзя изменить или удалить.")
+    return accrual
+
+
+def register_payment(db: Session, data: PaymentIn, today: date):
+    accrual = lock_accrual(db, data.accrual_id)
+    if data.payment_date > today:
+        raise HTTPException(422, "Дата платежа не может быть позже сегодняшней даты.")
     if data.payment_date < accrual.accrual_date:
         raise HTTPException(422, "Дата платежа не может предшествовать дате начисления.")
     paid = db.scalar(select(func.sum(Payment.amount)).where(Payment.accrual_id == accrual.id)) or ZERO

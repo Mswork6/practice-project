@@ -4,9 +4,10 @@ from datetime import date, timedelta
 from sqlalchemy import Date, cast, column, func, select, values
 from sqlalchemy.orm import Session
 
-from ..models import Accrual, Contract, ContractStatus, ContractType, Payment, Property, PropertyStatus, PropertyType
+from ..models import Accrual, Contract, ContractType, Payment, Property, PropertyStatus, PropertyType
 from ..schemas import Dashboard, KPIs, Panel, Period, Point
 from .finance import ZERO, overdue_balance
+from .registry import ContractState, contract_state
 
 MONTHS = ("Янв", "Фев", "Мар", "Апр", "Май", "Июн", "Июл", "Авг", "Сен", "Окт", "Ноя", "Дек")
 CONTRACT_LABELS = dict(zip(ContractType, ("Аренда недвижимости", "Аренда земли", "Продажа имущества", "Прочие")))
@@ -111,7 +112,9 @@ def contract_panel(db, today):
     end = shift_month(today, 12) - timedelta(days=1)
     month = month_key(Contract.end_date)
     endings = dict(db.execute(
-        select(month, func.count()).where(Contract.end_date.between(today, end)).group_by(month)
+        select(month, func.count())
+        .where(contract_state(today) == ContractState.ACTIVE, Contract.end_date.between(today, end))
+        .group_by(month)
     ).all())
     remaining = Contract.end_date - today
     intervals = ((0, 30), (31, 90), (91, 180))
@@ -119,7 +122,7 @@ def contract_panel(db, today):
         select(
             *(func.count().filter(remaining.between(first, last)) for first, last in intervals),
             func.count().filter(remaining >= 181),
-        ).select_from(Contract).where(Contract.status == ContractStatus.ACTIVE)
+        ).select_from(Contract).where(contract_state(today) == ContractState.ACTIVE)
     ).one()
     return sum(counts[:3]), end, Panel(
         trend=trend(months_between(today, end), endings),

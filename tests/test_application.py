@@ -1,5 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor
-from datetime import timedelta
+from datetime import date, timedelta
 from decimal import Decimal
 from threading import Barrier
 
@@ -90,6 +90,8 @@ def test_full_workflow_and_persistence(client, engine):
     property_url = f"/api/properties/{inputs['property_id']}"
     assert client.delete(property_url).status_code == 409
     assert client.delete(f"/api/contracts/{agreement['id']}").status_code == 409
+    assert client.patch(property_url, json={"status": "archived"}).status_code == 409
+    assert client.patch(f"/api/contracts/{agreement['id']}", json={"status": "completed"}).status_code == 200
     assert client.patch(property_url, json={"status": "archived"}).status_code == 200
     assert chart(client)["kpis"]["properties"] == 0
 
@@ -101,11 +103,14 @@ def test_full_workflow_and_persistence(client, engine):
         assert chart(restarted)["kpis"]["income"] == data["kpis"]["income"]
 
 
-def test_historical_cutoffs_and_current_kpis_ignore_period(client):
+def test_historical_cutoffs_and_current_kpis_ignore_period(client, engine):
     contract, _ = create_agreement(client)
     accrual = make_accrual(client, contract["id"], amount="25000", due_date="2026-09-30")
-    for amount, day in (("20000", "2026-09-28"), ("1000", "2026-11-15"), ("4000", "2026-12-01")):
+    for amount, day in (("20000", "2026-09-28"), ("1000", "2026-11-15")):
         create(client, "payments", {"accrual_id": accrual["id"], "amount": amount, "payment_date": day})
+    # Simulate a legacy payment accepted before the new date validation.
+    with Session(engine) as db, db.begin():
+        db.add(Payment(accrual_id=accrual["id"], amount=Decimal("4000"), payment_date=date(2026, 12, 1)))
     current = chart(client)
     debt = series(current["panels"]["debt"])
     assert debt["Сен 2026"] == 0  # due date is inclusive
@@ -113,6 +118,11 @@ def test_historical_cutoffs_and_current_kpis_ignore_period(client):
     assert debt["Ноя 2026"] == 4000
     assert Decimal(current["kpis"]["income"]) == 21000
     assert Decimal(current["kpis"]["debt"]) == 4000
+    balance = client.get(f"/api/accruals/{accrual['id']}").json()
+    assert [Decimal(balance[key]) for key in ("paid", "remaining", "overdue", "payment_limit")] == [
+        Decimal("21000"), Decimal("4000"), Decimal("4000"), Decimal("0"),
+    ]
+    assert balance["has_payments"]
 
     prior = chart(client, period="year", year=2025)
     assert Decimal(prior["kpis"]["income"]) == 0
@@ -133,10 +143,13 @@ def test_term_windows_and_category_labels(client):
         })
         assert result["days_remaining"] == days
     create(client, "contracts", {**base, "number": "ЗАВЕРШЁН", "status": "completed"})
+    create(client, "contracts", {**base, "number": "РАСТОРГНУТ", "status": "terminated"})
+    create(client, "contracts", {**base, "number": "ЕЩЁ НЕ НАЧАЛСЯ", "start_date": "2026-11-24"})
     create(client, "contracts", {**base, "number": "ПРОДАЖА", "type": "sale", "end_date": None})
 
     data = chart(client)
     assert data["kpis"]["renewals"] == 7
+    assert sum(series(data["panels"]["renewals"]).values()) == 8
     assert [(item["label"], item["value"]) for item in data["panels"]["renewals"]["structure"]] == [
         ("0–30 дней", 3), ("31–90 дней", 2), ("91–180 дней", 2), ("181 день и более", 1),
     ]
@@ -158,10 +171,11 @@ def test_registry_search_filters_patch_delete(client):
     filters = {"type": "land", "status": "in_use"}
     assert client.get("/api/properties", params=filters).json()["total"] == 0
     prop_url = f"/api/properties/{prop['id']}"
-    patch = client.patch(prop_url, json={"address": "Лесная 15", "status": "in_use", "area": "16.25"})
+    assert client.patch(prop_url, json={"status": "in_use"}).status_code == 422
+    patch = client.patch(prop_url, json={"address": "Лесная 15", "area": "16.25"})
     assert patch.status_code == 200
     assert patch.json()["name"] == prop["name"]
-    assert client.get("/api/properties", params=filters).json()["total"] == 1
+    assert client.get("/api/properties", params={**filters, "status": "available"}).json()["total"] == 1
     assert client.delete(prop_url).status_code == 204
 
     assert client.get("/api/contracts", params={"search": "контрагент", "status": "active"}).json()["total"] == 1
@@ -224,8 +238,8 @@ def test_accrual_filter(client, status, expected):
 
 def test_seed_is_reproducible_and_idempotent(engine):
     with Session(engine) as db, db.begin():
-        assert populate(db, AS_OF) == (100, 24, 124, 310, 310)
+        assert populate(db, AS_OF) == (100, 24, 124, 310, 309)
     with Session(engine) as db, db.begin():
         assert populate(db, AS_OF) is None
         counts = [db.scalar(select(func.count()).select_from(model)) for model in (Property, Contract, Accrual, Payment)]
-        assert counts == [100, 124, 310, 310]
+        assert counts == [100, 124, 310, 309]

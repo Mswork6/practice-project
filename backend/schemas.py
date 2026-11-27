@@ -5,6 +5,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 from .models import ContractStatus, ContractType, PropertyStatus, PropertyType
+from .services.registry import ContractState
 
 Name = Annotated[str, StringConstraints(min_length=1, max_length=200)]
 PositiveAmount = Annotated[Decimal, Field(gt=0, max_digits=14, decimal_places=2, allow_inf_nan=False)]
@@ -37,6 +38,7 @@ class PropertyIn(PropertyPatch):
 class PropertyOut(PropertyIn):
     id: Id
     created_at: date
+    can_archive: bool
 
 
 class CounterpartyIn(Schema):
@@ -83,14 +85,23 @@ class ContractOut(ContractIn):
     property_name: str
     counterparty_name: str
     days_remaining: int | None
+    state: ContractState
+    property_archived: bool
 
 
-class AccrualIn(Schema):
+class AccrualPatch(Schema):
+    contract_id: Id | None = None
+    amount: PositiveAmount | None = None
+    accrual_date: date | None = None
+    due_date: date | None = None
+    description: Annotated[str, StringConstraints(max_length=3000)] | None = None
+
+
+class AccrualIn(AccrualPatch):
     contract_id: Id
     amount: PositiveAmount
     accrual_date: date
     due_date: date
-    description: Annotated[str, StringConstraints(max_length=3000)] | None = None
 
     @model_validator(mode="after")
     def check_dates(self):
@@ -106,6 +117,8 @@ class AccrualOut(AccrualIn):
     paid: Decimal
     remaining: Decimal
     overdue: Decimal
+    has_payments: bool
+    payment_limit: Decimal
 
 
 class PaymentIn(Schema):

@@ -12,8 +12,9 @@ PageSize = Annotated[int, Query(ge=1, le=100)]
 Search = Annotated[str, Query(max_length=200)]
 
 
-def require(db: Session, model, id: int, message: str):
-    row = db.get(model, id)
+def require(db: Session, model, id: int, message: str, *, lock: bool = False):
+    # Serialize writers without blocking a foreign-key check on an unchanged primary key.
+    row = db.get(model, id, with_for_update={"key_share": True} if lock else None)
     if row is None:
         raise HTTPException(404, message)
     return row

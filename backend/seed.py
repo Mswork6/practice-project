@@ -11,6 +11,7 @@ from .database import get_engine
 from .models import Accrual, Contract, ContractStatus, ContractType, Counterparty, Payment, Property
 from .models import PropertyStatus, PropertyType
 from .services.dashboard import shift_month
+from .services.registry import compatible, property_status
 
 OBJECT_NAMES = {
     PropertyType.BUILDING: ("Административное здание", "Городская мастерская", "Здание склада", "Бывшая школа"),
@@ -25,7 +26,7 @@ TABLES = (Property, Counterparty, Contract, Accrual, Payment)
 def make_properties(random: Random, today: date):
     result = []
     for i in range(100):
-        kind = random.choices(list(PropertyType), weights=[30, 31, 28, 11])[0]
+        kind = list(PropertyType)[i - 96] if i >= 96 else random.choices(list(PropertyType), weights=[30, 31, 28, 11])[0]
         month = shift_month(today, -(i // 9))
         created = min(today, month + timedelta(days=random.randrange(24)))
         result.append(Property(
@@ -34,7 +35,7 @@ def make_properties(random: Random, today: date):
             address=f"г. Береговой, ул. {random.choice(STREETS)}, {i + 1}",
             area=Decimal(random.randint(23, 1800)),
             cadastral_number=f"66:00:0000000:{1001 + i}" if i % 6 != 0 else None,
-            status=random.choices(list(PropertyStatus), weights=[24, 67, 9])[0],
+            status=PropertyStatus.ARCHIVED if i < 96 and random.random() < .10 else PropertyStatus.AVAILABLE,
             created_at=created,
             note="Демонстрационная запись.",
         ))
@@ -51,14 +52,32 @@ def make_contracts(random: Random, today: date, properties, parties):
             else random.choices(list(ContractStatus), weights=[77, 18, 5])[0]
         )
         days = fixed_terms[i] if i < len(fixed_terms) else random.randint(-150, 360)
+        pending = i == 10
+        no_end = i == 11
+        if pending or no_end:
+            status = ContractStatus.ACTIVE
+            days = 60
+        if no_end:
+            kind = ContractType.SALE
+        if i == 12:
+            status = ContractStatus.TERMINATED
+        if i == 13:
+            status = ContractStatus.COMPLETED
         if status == ContractStatus.COMPLETED:
             days = -random.randint(1, 125)
         end = today + timedelta(days=days)
-        eligible = [item for item in properties if item.created_at <= min(today, end)]
+        if no_end or (kind == ContractType.SALE and i > 13 and i % 2 == 0):
+            end = None
+        open_contract = status == ContractStatus.ACTIVE and (end is None or end >= today)
+        eligible = [
+            item for item in properties
+            if compatible(kind, item.type) and item.created_at <= (min(today, end) if end else today)
+            and (not open_contract or item.status != PropertyStatus.ARCHIVED)
+        ]
         prop = random.choice(eligible)
         start = max(prop.created_at, today - timedelta(days=random.randint(145, 350)))
-        if kind == ContractType.SALE and i >= len(fixed_terms) and i % 2 == 0:
-            end = None
+        if pending:
+            start = today + timedelta(days=20)
         contracts.append(Contract(
             number=f"ДЕМО-{i + 1:03d}", type=kind, status=status, property_id=prop.id,
             counterparty_id=random.choice(parties).id, start_date=min(start, end) if end else start,
@@ -82,12 +101,14 @@ def populate(db: Session, today: date) -> tuple[int, int, int, int, int] | None:
     contracts = make_contracts(random, today, properties, parties)
     db.add_all(contracts)
     db.flush()
+    for prop, status in db.execute(select(Property, property_status(today))):
+        prop.status = PropertyStatus(status)
 
     accruals = []
     for i, contract in enumerate(contracts):
         latest = min(today, contract.end_date) if contract.end_date else today
         for j in range(2 + i % 2):
-            span = (latest - contract.start_date).days
+            span = max(0, (latest - contract.start_date).days)
             accrued = contract.start_date + timedelta(days=round(span * (j + random.random()) / (2 + i % 2)))
             accruals.append(Accrual(
                 contract_id=contract.id, amount=Decimal(random.randint(85, 1400)) * 100,
@@ -99,7 +120,7 @@ def populate(db: Session, today: date) -> tuple[int, int, int, int, int] | None:
 
     payments = []
     for i, accrual in enumerate(accruals):
-        if i % 5 == 0:
+        if i % 5 == 0 or accrual.accrual_date > today:
             continue
         delay = min((today - accrual.accrual_date).days, random.randint(6, 39))
         paid_date = accrual.accrual_date + timedelta(days=delay)
@@ -120,8 +141,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Заполнить пустую проектную БД демонстрационными данными.")
     parser.add_argument("--as-of", type=date.fromisoformat, default=local_today(), help="Опорная дата в формате ГГГГ-ММ-ДД.")
     today = parser.parse_args().as_of
-    if today < date(2, 1, 1) or today > date(9998, 12, 31):
-        parser.error("Укажите опорную дату в диапазоне от 0002 до 9998 года.")
+    if not date(2, 1, 1) <= today <= local_today():
+        parser.error("Укажите опорную дату от 0002 года до текущего дня включительно.")
     with Session(get_engine()) as db, db.begin():
         counts = populate(db, today)
     if counts:
