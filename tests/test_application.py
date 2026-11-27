@@ -26,6 +26,13 @@ def create(client, endpoint, data):
     return response.json()
 
 
+def assert_payment(client, payment):
+    response = client.get(f"/api/payments/{payment['id']}")
+    assert response.status_code == 200
+    detail = response.json()
+    assert {key: detail[key] for key in payment} == payment
+
+
 def create_agreement(client, **changes):
     prop = create(client, "properties", PROPERTY)
     party = create(client, "counterparties", {"name": "Тестовый контрагент", "tax_id": "660076500000"})
@@ -99,7 +106,7 @@ def test_full_workflow_and_persistence(client, engine):
     engine.dispose()
     with TestClient(app) as restarted:
         assert restarted.get(property_url).json()["status"] == "archived"
-        assert restarted.get(f"/api/payments/{payment['id']}").json() == payment
+        assert_payment(restarted, payment)
         assert chart(restarted)["kpis"]["income"] == data["kpis"]["income"]
 
 

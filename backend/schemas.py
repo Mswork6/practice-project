@@ -124,7 +124,12 @@ class AccrualOut(AccrualIn):
     payment_limit: Decimal
 
 
-class PaymentIn(Schema):
+class PaymentPatch(Schema):
+    amount: PositiveAmount | None = None
+    payment_date: date | None = None
+
+
+class PaymentIn(PaymentPatch):
     accrual_id: Id
     amount: PositiveAmount
     payment_date: date
@@ -132,6 +137,12 @@ class PaymentIn(Schema):
 
 class PaymentOut(PaymentIn):
     id: Id
+
+
+class PaymentDetail(PaymentOut):
+    contract_number: str
+    accrual_date: date
+    payment_limit: Decimal
 
 
 class Page[Item](Schema):

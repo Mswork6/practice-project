@@ -9,6 +9,7 @@ import { icon, reveal, setAppDate, today } from './ui.js';
 const routes = { properties, contracts, finance };
 const root = document.querySelector('#content');
 let cleanup;
+let renderedHash = location.hash;
 
 document.querySelectorAll('[data-icon]').forEach((element) => { element.innerHTML = icon(element.dataset.icon); });
 document.querySelector('.skip').addEventListener('click', (event) => {
@@ -18,8 +19,12 @@ document.querySelector('.skip').addEventListener('click', (event) => {
 setAppDate(today());
 
 function route(focus = false) {
+  if (!closeDialog()) {
+    history.replaceState(null, '', renderedHash || location.pathname + location.search);
+    return;
+  }
+  renderedHash = location.hash;
   cleanup?.();
-  closeDialog();
   const hash = window.location.hash.slice(1);
   const selected = Object.hasOwn(routes, hash) ? hash : 'dashboard';
   document.querySelectorAll('[data-route]').forEach((link) => {

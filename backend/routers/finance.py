@@ -1,11 +1,13 @@
 from fastapi import APIRouter, HTTPException, Response
 from sqlalchemy import case, func, or_, select
+from sqlalchemy.orm import aliased
 
 from ..config import local_today
 from ..database import Db, commit
 from ..models import Accrual, Contract, Payment, Property
-from ..schemas import AccrualIn, AccrualOut, AccrualPatch, BalanceStatus, Id, Page, PaymentIn, PaymentOut
-from ..services.finance import ZERO, lock_unpaid_accrual, register_payment
+from ..schemas import AccrualIn, AccrualOut, AccrualPatch, BalanceStatus, Id, Page
+from ..schemas import PaymentDetail, PaymentIn, PaymentOut, PaymentPatch
+from ..services.finance import ZERO, lock_payment, lock_unpaid_accrual, register_payment, validate_payment
 from .common import PageNumber, PageSize, Search, merge, paginate, require
 
 router = APIRouter(tags=["Финансы"])
@@ -110,6 +112,44 @@ def create_payment(data: PaymentIn, db: Db):
     return register_payment(db, data, local_today())
 
 
-@router.get("/payments/{id}", response_model=PaymentOut)
+@router.get("/payments/{id}", response_model=PaymentDetail)
 def payment_detail(id: Id, db: Db):
-    return require(db, Payment, id, "Платёж не найден.")
+    other = aliased(Payment)
+    other_paid = (
+        select(func.coalesce(func.sum(other.amount), ZERO))
+        .where(other.accrual_id == Payment.accrual_id, other.id != Payment.id)
+        .correlate(Payment)
+        .scalar_subquery()
+    )
+    query = (
+        select(Payment, Contract.number, Accrual.accrual_date, func.greatest(ZERO, Accrual.amount - other_paid))
+        .join(Accrual, Payment.accrual_id == Accrual.id)
+        .join(Contract, Accrual.contract_id == Contract.id)
+        .where(Payment.id == id)
+    )
+    row = db.execute(query).one_or_none()
+    if row is None:
+        raise HTTPException(404, "Платёж не найден.")
+    payment, number, day, limit = row
+    return PaymentDetail(
+        **PaymentOut.model_validate(payment).model_dump(), contract_number=number, accrual_date=day, payment_limit=limit,
+    )
+
+
+@router.patch("/payments/{id}", response_model=PaymentOut)
+def update_payment(id: Id, data: PaymentPatch, db: Db):
+    accrual, payment = lock_payment(db, id)
+    values = merge(PaymentIn, payment, data)
+    validate_payment(db, accrual, values["amount"], values["payment_date"], local_today(), excluding=id)
+    payment.amount = values["amount"]
+    payment.payment_date = values["payment_date"]
+    commit(db, "Платёж не удалось обновить.")
+    return payment
+
+
+@router.delete("/payments/{id}", status_code=204)
+def delete_payment(id: Id, db: Db):
+    _, payment = lock_payment(db, id)
+    db.delete(payment)
+    commit(db, "Платёж не удалось удалить.")
+    return Response(status_code=204)

@@ -13,7 +13,7 @@ function term(record) {
   return [`${record.days_remaining} дн.`, record.days_remaining <= 30 ? 'attention' : ''];
 }
 
-function addCounterparty(form, choose) {
+function addCounterparty(form, choose, view) {
   const toggle = form.querySelector('[data-new-party]');
   const editor = form.querySelector('.inline-editor');
   const fields = form.querySelectorAll('[data-party-field]');
@@ -27,9 +27,11 @@ function addCounterparty(form, choose) {
   }
   toggle.addEventListener('click', () => setOpen(editor.hidden));
   save.addEventListener('click', async () => {
+    if (view.busy()) return;
     const data = Object.fromEntries([...fields].map((input) => [input.dataset.partyField, input.value.trim() || null]));
     errorLabel.hidden = true;
     save.disabled = true;
+    view.setBusy(true);
     try {
       if (!data.name) throw new Error('Введите наименование контрагента.');
       const party = await api('counterparties', { method: 'POST', data });
@@ -37,12 +39,13 @@ function addCounterparty(form, choose) {
       notify('Контрагент создан и выбран.');
       fields.forEach((input) => { input.value = ''; });
       setOpen(false);
-      form.elements.counterparty_id.focus();
     } catch (error) {
       errorLabel.textContent = error.message;
       errorLabel.hidden = false;
     } finally {
       save.disabled = false;
+      view.setBusy(false);
+      (editor.hidden ? form.querySelector('[data-lookup=counterparty_id] [role=combobox]') : save).focus({ preventScroll: true });
     }
   });
 }
@@ -98,7 +101,7 @@ function edit(record, reload, source = null) {
     linkedProperty, () => ({ exclude_archived: true, contract_type: form.elements.type.value }));
   const choose = bindLookup(form, 'counterparty_id', 'counterparties', (item) => item.tax_id ? `${item.name} · ИНН ${item.tax_id}` : item.name,
     initial && { id: initial.counterparty_id, name: initial.counterparty_name });
-  addCounterparty(form, choose);
+  addCounterparty(form, choose, view);
   function updateEndDate() {
     const start = form.elements.start_date.value;
     form.elements.end_date.required = form.elements.type.value !== 'sale' || (active && Boolean(record.end_date));
@@ -144,8 +147,8 @@ function confirmClosure(record, action, reload) {
     });
 }
 
-export async function contractDetail(id, reload) {
-  const view = openDialog('Карточка договора', '<p role="status">Загрузка…</p>');
+export async function contractDetail(id, reload, view = openDialog('Карточка договора', '<p role="status">Загрузка…</p>')) {
+  view.refresh(() => contractDetail(id, reload, view));
   try {
     const record = await api(`${endpoint}/${id}`);
     const active = record.state === 'active';

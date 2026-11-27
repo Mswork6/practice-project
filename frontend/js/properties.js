@@ -24,8 +24,8 @@ function edit(record, reload) {
   });
 }
 
-async function detail(id, reload) {
-  const view = openDialog('Карточка объекта', '<p role="status">Загрузка…</p>');
+async function detail(id, reload, view = openDialog('Карточка объекта', '<p role="status">Загрузка…</p>')) {
+  view.refresh(() => detail(id, reload, view));
   try {
     const record = await api(`${endpoint}/${id}`);
     const html = `
@@ -53,6 +53,7 @@ async function detail(id, reload) {
     view.content.querySelector('[data-archive]')?.addEventListener('click', async (event) => {
       const button = event.currentTarget;
       button.disabled = true;
+      view.setBusy(true);
       try {
         const restore = record.status === 'archived';
         await api(`${endpoint}/${id}`, { method: 'PATCH', data: { status: restore ? 'available' : 'archived' } });
@@ -69,6 +70,7 @@ async function detail(id, reload) {
         view.content.append(message);
       } finally {
         button.disabled = false;
+        view.setBusy(false);
       }
     });
     view.content.querySelector('[data-edit]').addEventListener('click', () => edit(record, reload));

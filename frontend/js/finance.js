@@ -18,7 +18,7 @@ function edit(record, reload) {
     notify(record ? 'Начисление обновлено.' : 'Начисление добавлено.');
     reload();
   });
-  bindLookup(form, 'contract_id', 'contracts', (item) => `${item.number} · ${item.property_name}`, record && {
+  bindLookup(form, 'contract_id', 'contracts', (item) => [item.number, item.property_name, item.counterparty_name].filter(Boolean).join(' · '), record && {
     id: record.contract_id, number: record.contract_number, property_name: record.property_name,
   });
   function updateDueDate() { form.elements.due_date.min = form.elements.accrual_date.value; }
@@ -26,21 +26,50 @@ function edit(record, reload) {
   updateDueDate();
 }
 
-function addPayment(record, reload) {
+function paymentForm(record, reload, editing = false) {
   const day = today();
-  const view = editView('Новый платёж', `
-    <p class="full-width subheading">Доступный остаток по начислению № ${record.id} — ${money(record.payment_limit)}.</p>
-    ${field('amount', 'Сумма платежа, ₽', '', `type="number" min="0.01" step="0.01" max="${escape(record.payment_limit)}" required autofocus`)}
-    ${field('payment_date', 'Дата платежа', day, `type="date" min="${escape(record.accrual_date)}" max="${day}" required`)}`);
+  const accrual = editing ? record.accrual_id : record.id;
+  const view = editView(editing ? 'Редактирование платежа' : 'Новый платёж', `
+    <p class="full-width subheading">Максимальная сумма платежа по начислению № ${accrual} — ${money(record.payment_limit)}.</p>
+    ${field('amount', 'Сумма платежа, ₽', editing ? record.amount : '', `type="number" min="0.01" step="0.01" max="${escape(record.payment_limit)}" required autofocus`)}
+    ${field('payment_date', 'Дата платежа', editing ? record.payment_date : day, `type="date" min="${escape(record.accrual_date)}" max="${day}" required`)}`);
   bindForm(view, async (values) => {
-    await api('payments', { method: 'POST', data: { accrual_id: record.id, ...Object.fromEntries(values) } });
-    notify('Платёж зарегистрирован.');
+    const data = Object.fromEntries(values);
+    if (editing) await api(`payments/${record.id}`, { method: 'PATCH', data });
+    else await api('payments', { method: 'POST', data: { accrual_id: accrual, ...data } });
+    notify(editing ? 'Платёж обновлён.' : 'Платёж зарегистрирован.');
     reload();
   });
 }
 
-export async function accrualDetail(id, reload) {
-  const view = openDialog('Карточка начисления', '<p role="status">Загрузка…</p>');
+async function paymentDetail(id, reload, view = openDialog('Карточка платежа', '<p role="status">Загрузка…</p>')) {
+  view.refresh(() => paymentDetail(id, reload, view));
+  try {
+    const record = await api(`payments/${id}`);
+    const html = `${fieldsTable([
+      ['ID', id], ['Начисление', `№ ${record.accrual_id}`], ['Договор', record.contract_number],
+      ['Дата платежа', date(record.payment_date)], ['Сумма', money(record.amount)],
+    ])}
+    <div class="detail-actions">
+      <button type="button" class="button danger" data-delete>Удалить</button>
+      <button type="button" class="button primary" data-edit>Редактировать</button>
+    </div>`;
+    if (!view.set(`Платёж № ${id}`, html)) return;
+    view.content.querySelector('[data-edit]').addEventListener('click', () => paymentForm(record, reload, true));
+    view.content.querySelector('[data-delete]').addEventListener('click', () => {
+      confirmDelete(`Удалить платёж № ${id} от ${date(record.payment_date)} на сумму ${money(record.amount)}?`, async () => {
+        await api(`payments/${id}`, { method: 'DELETE' });
+        notify('Платёж удалён.');
+        reload();
+      });
+    });
+  } catch (error) {
+    dialogError(view, error);
+  }
+}
+
+export async function accrualDetail(id, reload, view = openDialog('Карточка начисления', '<p role="status">Загрузка…</p>')) {
+  view.refresh(() => accrualDetail(id, reload, view));
   try {
     const record = await api(`${endpoint}/${id}`);
     const futureAccrual = record.accrual_date > today();
@@ -63,10 +92,11 @@ export async function accrualDetail(id, reload) {
     if (!view.set(`Начисление № ${id}`, html)) return;
     relatedTable(view.content.querySelector('[data-related]'), {
       endpoint: 'payments', params: { accrual_id: id }, columns: ['ID', 'Дата платежа', 'Сумма'],
-      renderRow: (payment) => `<tr><td>${payment.id}</td><td class="number">${date(payment.payment_date)}</td><td class="number">${money(payment.amount)}</td></tr>`,
+      renderRow: (payment) => `<tr><td>${recordButton(payment, `№ ${payment.id}`)}</td><td class="number">${date(payment.payment_date)}</td><td class="number">${money(payment.amount)}</td></tr>`,
       empty: 'По начислению пока нет платежей.',
+      onClick: (paymentId) => paymentDetail(paymentId, reload),
     });
-    view.content.querySelector('[data-pay]')?.addEventListener('click', () => addPayment(record, reload));
+    view.content.querySelector('[data-pay]')?.addEventListener('click', () => paymentForm(record, reload));
     view.content.querySelector('[data-edit]')?.addEventListener('click', () => edit(record, reload));
     view.content.querySelector('[data-delete]')?.addEventListener('click', () => {
       confirmDelete(`Удалить начисление № ${id} по договору «${record.contract_number}»?`, async () => {

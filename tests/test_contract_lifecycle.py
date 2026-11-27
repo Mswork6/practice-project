@@ -2,7 +2,7 @@ from decimal import Decimal
 
 import pytest
 
-from test_application import chart, create, create_agreement, make_accrual
+from test_application import assert_payment, chart, create, create_agreement, make_accrual
 from test_business_rules import concurrent, day
 
 
@@ -68,7 +68,7 @@ def test_closure_preserves_dates_and_payable_debt(client, operation):
     assert property_status(client, agreement) == "available"
     assert chart(client)["kpis"]["renewals"] == 0
     assert Decimal(chart(client)["kpis"]["debt"]) == 75
-    assert client.get(f"/api/payments/{first_payment['id']}").json() == first_payment
+    assert_payment(client, first_payment)
     create(client, "payments", {**payload, "amount": "75"})
     assert Decimal(chart(client)["kpis"]["debt"]) == 0
 
@@ -86,7 +86,7 @@ def test_extend_changes_only_end_date_and_updates_dashboard(client):
     assert result.status_code == 200
     assert result.json() == {**agreement, "end_date": day(220), "days_remaining": 220}
     assert client.get(f"/api/accruals/{accrual['id']}").json()["contract_id"] == agreement["id"]
-    assert client.get(f"/api/payments/{payment['id']}").json() == payment
+    assert_payment(client, payment)
     metrics = chart(client)
     assert metrics["kpis"]["renewals"] == 0
     assert metrics["panels"]["renewals"]["structure"][-1]["value"] == 1
@@ -119,7 +119,7 @@ def test_successor_is_atomic_and_preserves_earlier_history(client):
     assert new["note"] == f"На основе договора № {old['number']}.\nНовая сделка"
     assert client.get(url).json() == {**old, "status": "completed", "state": "completed"}
     assert client.get(f"/api/accruals?contract_id={new['id']}").json()["total"] == 0
-    assert client.get(f"/api/payments/{payment['id']}").json() == payment
+    assert_payment(client, payment)
     assert Decimal(chart(client)["kpis"]["debt"]) == 75
     assert property_status(client, new) == "in_use"
     assert chart(client)["kpis"]["renewals"] == 1
