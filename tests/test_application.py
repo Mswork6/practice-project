@@ -9,8 +9,8 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from backend.main import app
-from backend.models import Accrual, Contract, Payment, Property
-from backend.seed import populate
+from backend.models import Accrual, Payment
+from backend.seed import TABLES, populate
 from conftest import AS_OF
 
 PROPERTY = {"name": "Тестовое здание", "type": "building", "address": "г. Береговой, ул. Новая, 15"}
@@ -240,9 +240,26 @@ def test_accrual_filter(client, status, expected):
 
 
 def test_seed_is_reproducible_and_idempotent(engine):
+    def snapshot(db):
+        return [
+            [tuple(row) for row in db.execute(select(*(
+                column for column in model.__table__.columns if not column.primary_key and not column.foreign_keys
+            )).order_by(model.id))]
+            for model in TABLES
+        ]
+
+    with Session(engine) as db:
+        first = populate(db, AS_OF)
+        db.flush()
+        original = snapshot(db)
+        db.rollback()
+
     with Session(engine) as db, db.begin():
-        assert populate(db, AS_OF) == (100, 24, 124, 310, 309)
+        assert populate(db, AS_OF) == first
+        assert first[:3] == (100, 30, 136)
+        db.flush()
+        assert snapshot(db) == original
     with Session(engine) as db, db.begin():
         assert populate(db, AS_OF) is None
-        counts = [db.scalar(select(func.count()).select_from(model)) for model in (Property, Contract, Accrual, Payment)]
-        assert counts == [100, 124, 310, 309]
+        counts = [db.scalar(select(func.count()).select_from(model)) for model in TABLES]
+        assert counts == list(first)
