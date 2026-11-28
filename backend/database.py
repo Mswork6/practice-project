@@ -28,11 +28,14 @@ def get_db() -> Iterator[Session]:
 Db = Annotated[Session, Depends(get_db)]
 
 
-def commit(db: Session, conflict: str) -> None:
+def commit(db: Session, conflict: str, *, constraints=None) -> None:
     try:
         db.commit()
     except IntegrityError as exc:
         db.rollback()
+        error = constraints and constraints.get(exc.orig.diag.constraint_name or exc.orig.diag.column_name)
+        if error:
+            raise HTTPException(*error) from None
         if exc.orig.sqlstate in {"23503", "23505"}:
             raise HTTPException(409, conflict) from None
         if exc.orig.sqlstate == "23514":

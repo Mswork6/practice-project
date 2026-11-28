@@ -33,7 +33,8 @@ export function mountDashboard(root) {
     <div class="live-message" aria-live="polite" hidden></div>
     <div class="analytics" id="analytics" aria-live="polite" aria-atomic="false">
       <section class="panel" aria-labelledby="trend-title">
-        <div class="panel-heading trend-heading"><div><h2 id="trend-title"></h2><p id="trend-subtitle"></p></div>
+        <div class="panel-heading trend-heading"><div><h2 id="trend-title"></h2><p id="trend-subtitle"></p>
+          <p class="chart-hint" id="trend-hint" hidden>Нажмите на столбец, чтобы посмотреть договоры</p></div>
           <label class="year-control" hidden><span>Год доходов</span><select name="year"></select></label>
         </div>
         <div class="chart-trend">
@@ -42,7 +43,8 @@ export function mountDashboard(root) {
         </div>
       </section>
       <section class="panel" aria-labelledby="structure-title">
-        <div class="panel-heading"><h2 id="structure-title"></h2><p id="structure-subtitle"></p></div>
+        <div class="panel-heading"><h2 id="structure-title"></h2><p id="structure-subtitle"></p>
+          <p class="chart-hint" id="structure-hint" hidden>Нажмите на категорию, чтобы посмотреть договоры</p></div>
         <div class="breakdown-layout">
           <div class="chart-breakdown">
             <canvas id="structure-chart" role="img"></canvas>
@@ -116,13 +118,21 @@ export function mountDashboard(root) {
     structureCanvas.hidden = !total;
     root.querySelector('#trend-empty').hidden = !panel || hasTrend;
     root.querySelector('#structure-empty').hidden = !panel || total !== 0;
-    root.querySelector('.legend').innerHTML = panel?.structure.map(({ label, value }, index) => `
+    const interactive = selected === 'renewals';
+    root.querySelector('#trend-hint').hidden = !interactive || !hasTrend;
+    root.querySelector('#structure-hint').hidden = !interactive || !total;
+    const legend = root.querySelector('.legend');
+    legend.classList.toggle('contract-legend', interactive);
+    legend.innerHTML = panel?.structure.map(({ key, label, value }, index) => {
+      const linked = interactive && Number(value) > 0;
+      return `
       <li title="${escape(format(value))}">
-        ${selected === 'renewals' && Number(value) ? `<a class="legend-link" href="${contractLink('term', panel.structure[index].key)}">` : ''}
+        ${linked ? `<a class="legend-link" href="${contractLink('term', key)}">` : ''}
         <span class="legend-dot" style="background:${chartColors[index]}" aria-hidden="true"></span>
         <span>${escape(label)}</span><strong>${total ? percent.format(Number(value) / total) : '0%'}</strong>
-        ${selected === 'renewals' && Number(value) ? '</a>' : ''}
-      </li>`).join('') ?? '';
+        ${linked ? `<span class="legend-chevron">${icon('chevron-right')}</span></a>` : ''}
+      </li>`;
+    }).join('') ?? '';
 
     if (!panel) return;
     if (hasTrend) {
@@ -294,10 +304,51 @@ function linksToContracts(points, key) {
   };
 }
 
+function growBars() {
+  let progress = 0;
+  let request;
+  let start;
+  let heights;
+  return {
+    id: 'grow-bars',
+    afterDraw(chart) {
+      if (request !== undefined || !chart.chartArea) return;
+      function drawFrame() {
+        const time = performance.now();
+        start ??= time;
+        const elapsed = Math.min(1, (time - start) / 650);
+        progress = reducedMotion.matches ? 1 : 1 - (1 - elapsed) ** 3;
+        chart.draw();
+        if (progress < 1) request = requestAnimationFrame(drawFrame);
+      }
+      request = requestAnimationFrame(drawFrame);
+    },
+    beforeDatasetDraw(_chart, { meta }) {
+      if (progress === 1) return;
+      // Draw against the final axes, independently of Chart.js responsive layout updates.
+      heights = meta.data.map(bar => {
+        const original = { y: bar.y, height: bar.height };
+        bar.y = bar.base + (bar.y - bar.base) * progress;
+        bar.height *= progress;
+        return original;
+      });
+    },
+    afterDatasetDraw(_chart, { meta }) {
+      if (!heights) return;
+      meta.data.forEach((bar, index) => Object.assign(bar, heights[index]));
+      heights = null;
+    },
+    beforeDestroy() {
+      cancelAnimationFrame(request);
+    },
+  };
+}
+
 function barConfig(mode, points, format) {
   const line = trendConfig(mode, points, format);
   return {
     type: 'bar',
+    plugins: reducedMotion.matches ? [] : [growBars()],
     data: {
       labels: line.data.labels,
       datasets: [{
@@ -310,7 +361,6 @@ function barConfig(mode, points, format) {
     },
     options: {
       ...line.options,
-      animation: reducedMotion.matches ? false : { duration: 450, easing: 'easeOutCubic' },
       interaction: { mode: 'nearest', intersect: true },
       ...(mode === modes.renewals ? linksToContracts(points, 'expiry_month') : {}),
       scales: {

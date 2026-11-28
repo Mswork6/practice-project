@@ -1,5 +1,5 @@
 import { api } from './api.js';
-import { bindForm, bindLookup, confirmAction, confirmDelete, dialogError, editView, field, fieldsTable, lookup, noteField, openDialog, relatedTable, selectField } from './dialog.js';
+import { bindForm, bindLookup, confirmAction, confirmDelete, editView, field, fieldsTable, lookup, noteField, loadDetail, relatedTable, selectField } from './dialog.js';
 import { accrualDetail } from './finance.js';
 import { financialSummary } from './financial-summary.js';
 import { recordButton } from './registry.js';
@@ -31,10 +31,8 @@ function setupFilters(form, initial, reload) {
     chip.onclick = () => {
       term.value = chip.dataset.term;
       month.value = '';
-      if (term.value) {
-        state.value = 'active';
-        sort.value = 'end_asc';
-      }
+      state.value = term.value ? 'active' : '';
+      if (term.value) sort.value = 'end_asc';
       show();
       reload();
     };
@@ -146,10 +144,9 @@ function confirmClosure(record, action, reload) {
     });
 }
 
-export async function contractDetail(id, reload, view = openDialog('Карточка договора', '<p role="status">Загрузка…</p>')) {
-  view.refresh(() => contractDetail(id, reload, view));
-  try {
-    const record = await api(`${endpoint}/${id}`);
+export function contractDetail(id, reload) {
+  const related = { endpoint: 'accruals', params: { contract_id: id } };
+  return loadDetail(`${endpoint}/${id}`, related, (record, initial, show) => {
     const active = record.state === 'active';
     const expired = record.state === 'expired';
     const canEdit = active || record.state === 'pending';
@@ -173,9 +170,9 @@ export async function contractDetail(id, reload, view = openDialog('Карточ
         ${canExtend ? '<button type="button" class="button primary" data-extend>Продлить</button>' : ''}
         ${!canEdit ? '<button type="button" class="button primary" data-successor>Создать новый договор на основе</button>' : ''}
       </div>`;
-    if (!view.set(`Договор № ${record.number}`, html)) return;
+    const view = show(`Договор № ${record.number}`, html);
     relatedTable(view.content.querySelector('[data-accruals]'), {
-      endpoint: 'accruals', params: { contract_id: id }, columns: ['Начисление', 'Сумма', 'Остаток'],
+      ...related, initial, columns: ['Начисление', 'Сумма', 'Остаток'],
       renderRow: (item) => `<tr><td>${recordButton(item, `№ ${item.id} · ${date(item.accrual_date)}`)}</td>
         <td class="number">${money(item.amount)}</td><td class="number">${money(item.remaining)}</td></tr>`,
       empty: 'По договору пока нет начислений.', onClick: (accrualId) => accrualDetail(accrualId, reload),
@@ -192,9 +189,7 @@ export async function contractDetail(id, reload, view = openDialog('Карточ
         reload();
       });
     });
-  } catch (error) {
-    dialogError(view, error);
-  }
+  });
 }
 
 export const contracts = {
@@ -203,7 +198,8 @@ export const contracts = {
   filters: [['type', 'Тип договора', contractTypes, 'Все типы'], ['state', 'Статус договора', contractStates, 'Все статусы']],
   columns: ['Договор', 'Контрагент', 'Начало', 'Окончание', 'Осталось', 'Сумма', 'Статус договора'],
   sortable: { 'Начало': 'start', 'Окончание': 'end' },
-  filterControls: `<div class="quick-filters" role="group" aria-label="Срок окончания">
+  filterControls: `<div class="quick-filters" role="group" aria-labelledby="term-label">
+    <span id="term-label" class="filter-label">Оставшийся срок действия договора</span>
     <input type="hidden" name="term"><input type="hidden" name="expiry_month"><input type="hidden" name="sort">
     ${Object.entries(expiryTerms).map(([term, label]) => `<button type="button" class="button small" data-term="${term}">${label}</button>`).join('')}
     <div class="month-filter" data-month hidden><span></span><button type="button" class="button small" aria-label="Сбросить месяц">×</button></div>

@@ -1,5 +1,5 @@
 import { api } from './api.js';
-import { bindForm, confirmDelete, dialogError, editView, field, fieldsTable, noteField, openDialog, relatedTable, selectField } from './dialog.js';
+import { bindForm, confirmDelete, editView, field, fieldsTable, noteField, loadDetail, relatedTable, selectField } from './dialog.js';
 import { recordButton } from './registry.js';
 import { badge, contractStates, date, escape, notify, number, propertyStatuses, propertyTypes } from './ui.js';
 import { contractDetail } from './contracts.js';
@@ -24,10 +24,9 @@ function edit(record, reload) {
   });
 }
 
-async function detail(id, reload, view = openDialog('Карточка объекта', '<p role="status">Загрузка…</p>')) {
-  view.refresh(() => detail(id, reload, view));
-  try {
-    const record = await api(`${endpoint}/${id}`);
+function detail(id, reload) {
+  const related = { endpoint: 'contracts', params: { property_id: id } };
+  return loadDetail(`${endpoint}/${id}`, related, (record, initial, show) => {
     const html = `
       ${fieldsTable([
         ['ID', record.id], ['Дата внесения', date(record.created_at)], ['Адрес', record.address, true],
@@ -44,9 +43,9 @@ async function detail(id, reload, view = openDialog('Карточка объек
       </div>
       ${record.status !== 'archived' && !record.can_archive ?
         '<p class="form-error">Архивирование доступно после окончания действующих и ожидающих начала договоров.</p>' : ''}`;
-    if (!view.set(record.name, html)) return;
+    const view = show(record.name, html);
     relatedTable(view.content.querySelector('[data-related]'), {
-      endpoint: 'contracts', params: { property_id: id }, columns: ['Номер', 'Статус договора', 'Окончание'],
+      ...related, initial, columns: ['Номер', 'Статус договора', 'Окончание'],
       renderRow: (item) => `<tr><td>${recordButton(item, item.number)}</td><td>${escape(contractStates[item.state])}</td><td class="number">${date(item.end_date)}</td></tr>`,
       empty: 'У объекта пока нет договоров.', onClick: (contractId) => contractDetail(contractId, reload),
     });
@@ -81,9 +80,7 @@ async function detail(id, reload, view = openDialog('Карточка объек
         reload();
       });
     });
-  } catch (error) {
-    dialogError(view, error);
-  }
+  });
 }
 
 export const properties = {

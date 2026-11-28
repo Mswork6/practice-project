@@ -22,7 +22,7 @@ function controls(data, position) {
   </nav>`;
 }
 
-export function pagedTable(container, { endpoint, params, columns, renderRow, empty, onClick, pageSize,
+export function pagedTable(container, { endpoint, params, columns, renderRow, empty, onClick, pageSize, initial,
   nested = false, sortable = {}, sortValue, onSort }) {
   container.innerHTML = `<div class="table-feedback" aria-live="polite" hidden></div>
     <div class="table-start" tabindex="-1"></div><div class="table-body"></div><div data-bottom></div>`;
@@ -51,16 +51,16 @@ export function pagedTable(container, { endpoint, params, columns, renderRow, em
 
   function scrollToStart() {
     const behavior = reducedMotion.matches ? 'instant' : 'smooth';
-    const dialog = container.closest('dialog');
-    if (dialog) {
-      const top = dialog.scrollTop + start.getBoundingClientRect().top - dialog.getBoundingClientRect().top - 12;
-      dialog.scrollTo({ top, behavior });
+    const scroller = container.closest('.dialog-content');
+    if (scroller) {
+      const top = scroller.scrollTop + start.getBoundingClientRect().top - scroller.getBoundingClientRect().top - 12;
+      scroller.scrollTo({ top, behavior });
     } else {
       start.scrollIntoView({ block: 'start', behavior });
     }
   }
 
-  function draw(result) {
+  function draw(result, animate = true) {
     const populated = result.total > 0;
     const previous = document.activeElement?.closest('[data-record]');
     const restoreRecord = body.contains(previous) ? previous.dataset.record : null;
@@ -79,7 +79,7 @@ export function pagedTable(container, { endpoint, params, columns, renderRow, em
       }).join('')}</tr></thead>
       <tbody>${result.items.map(renderRow).join('')}</tbody>
     </table></div>` : `<p class="list-message">${escape(empty)}</p>`;
-    reveal(body, { offset: 0, duration: 170 });
+    if (animate) reveal(body, { offset: 0, duration: 170 });
     if (focusAfter && (container.contains(document.activeElement) || document.activeElement === document.body)) {
       (start.querySelector('[aria-current]') || start).focus({ preventScroll: true });
     } else if (restoreRecord) {
@@ -133,7 +133,8 @@ export function pagedTable(container, { endpoint, params, columns, renderRow, em
     if (event.target.closest('[data-retry]')) load();
   });
 
-  load();
+  if (initial) draw(initial, false);
+  else load();
   return {
     load,
     reset() { page = 1; focusAfter = false; load(); },
@@ -141,6 +142,12 @@ export function pagedTable(container, { endpoint, params, columns, renderRow, em
   };
 }
 
+const relatedPageSize = 8;
+
+export function relatedPage(endpoint, params, signal) {
+  return api(endpoint, { params: { ...params, page: 1, page_size: relatedPageSize }, signal });
+}
+
 export function relatedTable(container, config) {
-  return pagedTable(container, { ...config, params: () => config.params, pageSize: 8, nested: true });
+  return pagedTable(container, { ...config, params: () => config.params, pageSize: relatedPageSize, nested: true });
 }

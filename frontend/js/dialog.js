@@ -1,5 +1,7 @@
-import { escape, options, reveal } from './ui.js';
+import { api } from './api.js';
+import { escape, notify, options, reveal } from './ui.js';
 import { closeLookup } from './lookup.js';
+import { relatedPage } from './paged-table.js';
 
 export { bindLookup, lookup } from './lookup.js';
 export { relatedTable } from './paged-table.js';
@@ -8,19 +10,80 @@ const dialog = document.querySelector('#dialog');
 const title = dialog.querySelector('#dialog-title');
 const host = dialog.querySelector('#dialog-content');
 const closeButton = dialog.querySelector('#dialog-close');
+const loading = document.querySelector('#detail-loading');
+const feedback = dialog.querySelector('#dialog-feedback');
 const frames = [];
 let backdropPress = false;
 let retiring;
-let sizing;
-const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+let pending;
 
 const top = () => frames.at(-1);
 
-function resizeFrom(height) {
-  sizing?.cancel();
-  const target = dialog.getBoundingClientRect().height;
-  if (!height || reducedMotion.matches || Math.abs(target - height) < 1) return;
-  sizing = dialog.animate({ height: [`${height}px`, `${target}px`] }, { duration: 160, easing: 'ease-out' });
+function cancelDetail(abort = true) {
+  if (!pending) return;
+  if (abort) pending.controller.abort();
+  clearTimeout(pending.timer);
+  if (pending.opener instanceof HTMLElement) pending.opener.removeAttribute('aria-busy');
+  loading.hidden = true;
+  feedback.hidden = true;
+  pending = null;
+}
+
+export async function loadDetail(path, related, render, view) {
+  const parent = top();
+  if (view && !view.current()) return;
+  if (pending?.path === path && pending.parent === parent && pending.view === view) return;
+  cancelDetail();
+  const controller = new AbortController();
+  const { signal } = controller;
+  const opener = document.activeElement;
+  const sourceTable = opener?.closest('.table-body');
+  feedback.hidden = true;
+  const timer = setTimeout(() => {
+    const status = parent ? feedback : loading;
+    status.textContent = 'Загрузка карточки…';
+    status.hidden = false;
+  }, 180);
+  pending = { path, parent, view, controller, opener, timer };
+  if (opener instanceof HTMLElement) opener.setAttribute('aria-busy', 'true');
+  const hash = location.hash;
+  try {
+    const [record, page] = await Promise.all([
+      api(path, { signal }),
+      related ? relatedPage(related.endpoint, related.params, signal) : null,
+    ]);
+    const liveOpener = opener?.isConnected ? opener :
+      sourceTable?.querySelector(`[data-record="${CSS.escape(opener.dataset.record)}"]`);
+    if (signal.aborted || hash !== location.hash || top() !== parent || !liveOpener?.isConnected) return;
+    cancelDetail(false);
+    const scrollTop = host.scrollTop;
+    const focusKey = view?.content.contains(opener) && opener.getAttributeNames().find(name => name.startsWith('data-'));
+    render(record, page, (heading, html) => {
+      const card = view ?? openDialog(heading, html, liveOpener);
+      if (view) view.set(heading, html);
+      card.refresh(() => loadDetail(path, related, render, card));
+      return card;
+    });
+    if (view) {
+      if (focusKey) {
+        [...view.content.querySelectorAll(`[${CSS.escape(focusKey)}]`)]
+          .find(element => element.getAttribute(focusKey) === opener.getAttribute(focusKey))
+          ?.focus({ preventScroll: true });
+      }
+      host.scrollTop = scrollTop;
+    }
+  } catch (error) {
+    if (signal.aborted || hash !== location.hash || top() !== parent) return;
+    cancelDetail();
+    if (parent) {
+      feedback.textContent = error.message;
+      feedback.hidden = false;
+    } else {
+      notify(error.message);
+    }
+  } finally {
+    if (pending?.controller === controller) cancelDetail();
+  }
 }
 
 function isBackdrop(event) {
@@ -30,6 +93,9 @@ function isBackdrop(event) {
 }
 
 closeButton.addEventListener('click', dismiss);
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && pending && !dialog.open) cancelDetail();
+});
 dialog.addEventListener('pointerdown', (event) => {
   backdropPress = event.isPrimary && event.button === 0 && isBackdrop(event);
 });
@@ -39,22 +105,30 @@ dialog.addEventListener('click', (event) => {
   backdropPress = false;
   if (outside) dismiss();
 });
+dialog.addEventListener('keydown', (event) => {
+  if (event.key !== 'Escape' || event.defaultPrevented) return;
+  if (event.target instanceof HTMLSelectElement && CSS.supports('selector(select:open)') && event.target.matches(':open')) return;
+  event.preventDefault();
+  if (!event.repeat && !closeLookup()) dismiss();
+});
 dialog.addEventListener('cancel', (event) => {
   event.preventDefault();
   if (!closeLookup()) dismiss();
 });
 
 function activate(frame, focus, scrollTop = 0) {
+  feedback.hidden = true;
   title.textContent = frame.heading;
   closeButton.disabled = frame.busy;
   frame.content.hidden = false;
+  if (!dialog.open) dialog.showModal();
   (focus?.isConnected ? focus : frame.content.querySelector('[autofocus]') ?? closeButton).focus({ preventScroll: true });
-  dialog.scrollTop = scrollTop;
+  host.scrollTop = scrollTop;
 }
 
 function pop(count = 1, changed = false) {
   closeLookup();
-  const height = dialog.getBoundingClientRect().height;
+  cancelDetail();
   const outgoing = top();
   let removed;
   for (let i = 0; i < count && frames.length; i++) {
@@ -65,7 +139,6 @@ function pop(count = 1, changed = false) {
 
   const parent = top();
   if (!parent) {
-    sizing?.cancel();
     retiring = outgoing.content;
     const node = retiring;
     node.inert = true;
@@ -81,8 +154,7 @@ function pop(count = 1, changed = false) {
   }
   outgoing.content.remove();
   activate(parent, removed.opener, parent.scrollTop);
-  resizeFrom(height);
-  reveal(parent.content);
+  reveal(parent.content, { offset: 0 });
   if (parent.stale && parent.refresh) {
     parent.stale = false;
     parent.refresh();
@@ -106,6 +178,7 @@ function dismiss() {
 }
 
 export function closeDialog() {
+  cancelDetail();
   if (frames.some((frame) => frame.busy)) return false;
   if (frames.some((frame) => frame.dirty?.())) {
     if (top()?.dirty?.()) dismiss();
@@ -115,26 +188,22 @@ export function closeDialog() {
   return true;
 }
 
-export function openDialog(heading, html) {
+export function openDialog(heading, html, opener = document.activeElement) {
   closeLookup();
+  cancelDetail();
   retiring?.remove();
   retiring = null;
   const parent = top();
-  const height = parent ? dialog.getBoundingClientRect().height : 0;
-  const frame = { heading, opener: document.activeElement, content: document.createElement('div'), busy: false };
+  const frame = { heading, opener, content: document.createElement('div'), busy: false };
   frame.content.innerHTML = html;
   if (parent) {
-    if (frame.content.querySelector(':scope > [role=status]')) {
-      frame.content.style.minHeight = `${Math.min(parent.content.offsetHeight, host.clientHeight, height * .75)}px`;
-    }
-    parent.scrollTop = dialog.scrollTop;
+    parent.scrollTop = host.scrollTop;
     parent.content.hidden = true;
   }
   host.append(frame.content);
   frames.push(frame);
-  if (!dialog.open) dialog.showModal();
   activate(frame);
-  if (parent) { resizeFrom(height); reveal(frame.content); }
+  if (parent) reveal(frame.content, { offset: 0 });
 
   return {
     content: frame.content,
@@ -143,15 +212,12 @@ export function openDialog(heading, html) {
       if (!frames.includes(frame)) return false;
       frame.heading = newHeading;
       const active = top() === frame;
-      const height = active ? dialog.getBoundingClientRect().height : 0;
       const restore = active && frame.content.contains(document.activeElement);
       frame.content.innerHTML = newHtml;
-      frame.content.style.minHeight = '';
       if (active) {
         title.textContent = newHeading;
         if (restore) closeButton.focus({ preventScroll: true });
-        resizeFrom(height);
-        reveal(frame.content);
+        reveal(frame.content, { offset: 0 });
       }
       return true;
     },
@@ -167,10 +233,6 @@ export function openDialog(heading, html) {
       if (top() === frame) pop(closeParent ? 2 : 1, changed);
     },
   };
-}
-
-export function dialogError(view, error, heading = 'Запись недоступна') {
-  view.set(heading, `<p class="form-error" role="alert">${escape(error.message)}</p>`);
 }
 
 export function fieldsTable(fields) {

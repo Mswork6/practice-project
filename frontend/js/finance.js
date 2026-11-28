@@ -1,5 +1,5 @@
 import { api } from './api.js';
-import { bindForm, bindLookup, confirmDelete, dialogError, editView, field, fieldsTable, lookup, noteField, openDialog, relatedTable } from './dialog.js';
+import { bindForm, bindLookup, confirmDelete, editView, field, fieldsTable, lookup, noteField, loadDetail, relatedTable } from './dialog.js';
 import { recordButton } from './registry.js';
 import { badge, date, escape, money, notify, today } from './ui.js';
 
@@ -42,10 +42,8 @@ function paymentForm(record, reload, editing = false) {
   });
 }
 
-async function paymentDetail(id, reload, view = openDialog('Карточка платежа', '<p role="status">Загрузка…</p>')) {
-  view.refresh(() => paymentDetail(id, reload, view));
-  try {
-    const record = await api(`payments/${id}`);
+function paymentDetail(id, reload) {
+  return loadDetail(`payments/${id}`, null, (record, _, show) => {
     const html = `${fieldsTable([
       ['ID', id], ['Начисление', `№ ${record.accrual_id}`], ['Договор', record.contract_number],
       ['Дата платежа', date(record.payment_date)], ['Сумма', money(record.amount)],
@@ -54,7 +52,7 @@ async function paymentDetail(id, reload, view = openDialog('Карточка п�
       <button type="button" class="button danger" data-delete>Удалить</button>
       <button type="button" class="button primary" data-edit>Редактировать</button>
     </div>`;
-    if (!view.set(`Платёж № ${id}`, html)) return;
+    const view = show(`Платёж № ${id}`, html);
     view.content.querySelector('[data-edit]').addEventListener('click', () => paymentForm(record, reload, true));
     view.content.querySelector('[data-delete]').addEventListener('click', () => {
       confirmDelete(`Удалить платёж № ${id} от ${date(record.payment_date)} на сумму ${money(record.amount)}?`, async () => {
@@ -63,15 +61,12 @@ async function paymentDetail(id, reload, view = openDialog('Карточка п�
         reload();
       });
     });
-  } catch (error) {
-    dialogError(view, error);
-  }
+  });
 }
 
-export async function accrualDetail(id, reload, view = openDialog('Карточка начисления', '<p role="status">Загрузка…</p>')) {
-  view.refresh(() => accrualDetail(id, reload, view));
-  try {
-    const record = await api(`${endpoint}/${id}`);
+export function accrualDetail(id, reload) {
+  const related = { endpoint: 'payments', params: { accrual_id: id } };
+  return loadDetail(`${endpoint}/${id}`, related, (record, initial, show) => {
     const futureAccrual = record.accrual_date > today();
     const hasFuturePayments = Number(record.payment_limit) < Number(record.remaining);
     const html = `
@@ -89,9 +84,9 @@ export async function accrualDetail(id, reload, view = openDialog('Карточ�
         ${record.has_payments ? '' : '<button type="button" class="button danger" data-delete>Удалить</button><button type="button" class="button" data-edit>Редактировать</button>'}
         ${!futureAccrual && Number(record.payment_limit) > 0 ? '<button type="button" class="button primary" data-pay>Зарегистрировать платёж</button>' : ''}
       </div>`;
-    if (!view.set(`Начисление № ${id}`, html)) return;
+    const view = show(`Начисление № ${id}`, html);
     relatedTable(view.content.querySelector('[data-related]'), {
-      endpoint: 'payments', params: { accrual_id: id }, columns: ['ID', 'Дата платежа', 'Сумма'],
+      ...related, initial, columns: ['ID', 'Дата платежа', 'Сумма'],
       renderRow: (payment) => `<tr><td>${recordButton(payment, `№ ${payment.id}`)}</td><td class="number">${date(payment.payment_date)}</td><td class="number">${money(payment.amount)}</td></tr>`,
       empty: 'По начислению пока нет платежей.',
       onClick: (paymentId) => paymentDetail(paymentId, reload),
@@ -105,9 +100,7 @@ export async function accrualDetail(id, reload, view = openDialog('Карточ�
         reload();
       });
     });
-  } catch (error) {
-    dialogError(view, error);
-  }
+  });
 }
 
 export const finance = {

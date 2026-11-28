@@ -147,7 +147,7 @@ def audit(db: Session, today):
             "примечания и описания заполнены у 30–50% строк каждой сущности")
     field_values = (
         [(p.name, p.address, p.note) for p in properties.values()]
-        + [(p.name, p.contact) for p in parties.values()]
+        + [(p.name, p.email) for p in parties.values()]
         + [(c.number, c.note) for c in contracts.values()]
         + [(a.description,) for a in accruals.values()]
     )

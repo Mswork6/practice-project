@@ -3,9 +3,9 @@ from decimal import Decimal
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator, model_validator
-import re
 
 from .models import ContractStatus, ContractType, PropertyStatus, PropertyType
+from .services.counterparty import clean_email, normalize_tax_id, valid_tax_id
 from .services.registry import ContractState
 
 Name = Annotated[str, StringConstraints(min_length=1, max_length=200)]
@@ -44,26 +44,30 @@ class PropertyOut(PropertyIn):
 
 class CounterpartyFields(Schema):
     name: Name
-    tax_id: Annotated[str, StringConstraints(max_length=20)] | None = None
-    contact: Annotated[str, StringConstraints(max_length=250)] | None = None
+    tax_id: str
+    email: str | None = None
+
+    @field_validator("tax_id")
+    @classmethod
+    def check_tax_id(cls, value):
+        value = normalize_tax_id(value)
+        if not valid_tax_id(value):
+            raise ValueError("ИНН должен содержать 10 или 12 цифр.")
+        return value
+
+    @field_validator("email")
+    @classmethod
+    def check_email(cls, value):
+        return clean_email(value)
 
 
 class CounterpartyPatch(CounterpartyFields):
     name: Name | None = None
-
-    @field_validator("tax_id", mode="before")
-    @classmethod
-    def normalize_tax_id(cls, value):
-        if isinstance(value, str):
-            value = re.sub(r"[\s-]", "", value)
-            if value and not re.fullmatch(r"[0-9]{10}|[0-9]{12}", value):
-                raise ValueError("ИНН должен содержать 10 или 12 цифр.")
-            return value or None
-        return value
+    tax_id: str | None = None
 
 
-class CounterpartyIn(CounterpartyPatch):
-    name: Name
+class CounterpartyIn(CounterpartyFields):
+    pass
 
 
 class CounterpartyOut(CounterpartyFields):

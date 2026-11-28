@@ -1,6 +1,5 @@
 from decimal import Decimal
-from sqlalchemy.orm import Session
-from backend.models import Counterparty
+import pytest
 
 from test_application import chart, create, create_agreement, make_accrual
 from test_business_rules import concurrent, day
@@ -55,13 +54,19 @@ def test_contract_filters_match_analytics(client):
 
 
 def test_counterparty_lifecycle(client):
-    party = create(client, "counterparties", {"name": "Городская мастерская", "tax_id": "1234 56-7890"})
+    party = create(client, "counterparties", {
+        "name": "Городская мастерская", "tax_id": "0012 34-5678", "email": " office@example.com ",
+    })
     url = f"/api/counterparties/{party['id']}"
-    assert party["tax_id"] == "1234567890"
-    assert client.get("/api/counterparties", params={"search": "7890", "page_size": 1}).json()["total"] == 1
-    assert client.post("/api/counterparties", json={"name": "Другая", "tax_id": "1234-567890"}).status_code == 409
-    assert client.post("/api/counterparties", json={"name": "Другая", "tax_id": "ABC"}).status_code == 422
-    assert client.patch(url, json={"tax_id": "", "contact": "Мастерская"}).json()["tax_id"] is None
+    assert party["tax_id"] == "0012345678"
+    assert party["email"] == "office@example.com"
+    assert client.get("/api/counterparties", params={"search": "0012-34", "page_size": 1}).json()["total"] == 1
+    conflict = client.post("/api/counterparties", json={"name": "Другая", "tax_id": "0012-345678"})
+    assert conflict.status_code == 409 and "ИНН" in conflict.json()["detail"]
+    assert client.patch(url, json={"tax_id": ""}).status_code == 422
+    assert client.patch(url, json={"tax_id": None}).status_code == 422
+    assert client.patch(url, json={"email": "   "}).json()["email"] is None
+    assert client.get(url).json()["tax_id"] == party["tax_id"]
     assert client.delete(url).status_code == 204
     assert client.get(url).status_code == 404
 
@@ -74,17 +79,26 @@ def test_parallel_counterparties_cannot_duplicate_tax_id(client):
     assert sorted(result) == [201, 409]
 
 
-def test_existing_nonstandard_tax_id_stays_readable(client, engine):
-    with Session(engine) as db, db.begin():
-        record = Counterparty(name="Ранее сохранённый", tax_id="0000074501130")
-        db.add(record)
-        db.flush()
-        id = record.id
-    url = f"/api/counterparties/{id}"
-    assert client.get("/api/counterparties").json()["items"][0]["tax_id"] == "0000074501130"
-    assert client.patch(url, json={"contact": "Офис"}).json()["tax_id"] == "0000074501130"
-    assert client.patch(url, json={"tax_id": "0000074501130"}).status_code == 422
-    assert client.patch(url, json={"tax_id": "000007450113"}).status_code == 200
+def test_counterparty_without_email_accepts_twelve_digit_identifier(client):
+    party = create(client, "counterparties", {"name": "ИП", "tax_id": "000007450113"})
+    assert party["tax_id"] == "000007450113" and party["email"] is None
+    assert client.patch(f"/api/counterparties/{party['id']}", json={"email": None}).status_code == 200
+
+
+@pytest.mark.parametrize("fields", [
+    {}, {"tax_id": None}, {"tax_id": "  - "}, {"tax_id": "12345678901"},
+    {"tax_id": "12345678ab"}, {"tax_id": "１２３４５６７８９０"}, {"tax_id": 1234567890},
+])
+def test_counterparty_rejects_missing_or_invalid_tax_id(client, fields):
+    assert client.post("/api/counterparties", json={"name": "Контрагент", **fields}).status_code == 422
+
+
+@pytest.mark.parametrize("email", ["+7 333 1234567", "Контактное лицо", "user@example", "a..b@example.com", "a@-example.com"])
+def test_counterparty_rejects_non_email_values(client, email):
+    fields = {"name": "Контрагент", "tax_id": "0012345678"}
+    assert client.post("/api/counterparties", json={**fields, "email": email}).status_code == 422
+    party = create(client, "counterparties", fields)
+    assert client.patch(f"/api/counterparties/{party['id']}", json={"email": email}).status_code == 422
 
 
 def test_shared_financial_totals_follow_payment_and_accrual_updates(client):

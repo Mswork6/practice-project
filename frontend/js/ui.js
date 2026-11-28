@@ -9,6 +9,7 @@ const paths = {
   search: '<circle cx="10.5" cy="10.5" r="5.5"/><path d="m15 15 4 4"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
   close: '<path d="m6 6 12 12M18 6 6 18"/>',
+  'chevron-right': '<path d="m9 5 7 7-7 7"/>',
 };
 
 export function icon(name) {

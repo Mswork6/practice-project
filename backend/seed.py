@@ -79,8 +79,8 @@ def make_properties(random: Random, today: date):
     return properties
 
 
-def tax_number(index, individual):
-    digits = [int(digit) for digit in f"{index + 7450110:0{10 if individual else 9}d}"]
+def tax_number(index, individual, *, individual_width=10):
+    digits = [int(digit) for digit in f"{index + 7450110:0{individual_width if individual else 9}d}"]
     if individual:
         digits.append(sum(a * b for a, b in zip(digits, (7, 2, 4, 10, 3, 5, 9, 4, 6, 8))) % 11 % 10)
         weights = (3, 7, 2, 4, 10, 3, 5, 9, 4, 6, 8)
@@ -95,7 +95,7 @@ def make_parties():
         Counterparty(
             name=name,
             tax_id=tax_number(index, name.startswith("ИП ")),
-            contact=f"{'contact' if name.startswith('ИП ') else 'office'}@{domain}.invalid",
+            email=f"{'contact' if name.startswith('ИП ') else 'office'}@{domain}.invalid",
         )
         for index, (name, domain) in enumerate(PARTIES, 1)
     ]

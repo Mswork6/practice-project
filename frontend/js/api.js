@@ -2,7 +2,7 @@ const fields = {
   name: 'Наименование', type: 'Тип', status: 'Статус', address: 'Адрес', area: 'Площадь', amount: 'Сумма',
   start_date: 'Дата начала', end_date: 'Дата окончания', accrual_date: 'Дата начисления', due_date: 'Срок оплаты',
   payment_date: 'Дата платежа', number: 'Номер договора', property_id: 'Объект', counterparty_id: 'Контрагент',
-  contract_id: 'Договор', accrual_id: 'Начисление', tax_id: 'ИНН', note: 'Примечание', year: 'Год',
+  contract_id: 'Договор', accrual_id: 'Начисление', tax_id: 'ИНН', email: 'Электронная почта', note: 'Примечание', year: 'Год',
 };
 
 function describe(detail) {

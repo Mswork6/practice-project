@@ -55,6 +55,10 @@ def verified_backup(pg_bin: Path):
     return destination
 
 
+def default_pg_bin():
+    return Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "PostgreSQL" / "15" / "bin"
+
+
 def replace_synthetic(db, expected_digest, backup, today):
     lock_dataset(db)
     if fingerprint(db) != expected_digest:
@@ -72,8 +76,7 @@ def main():
     action = parser.add_mutually_exclusive_group(required=True)
     action.add_argument("--fingerprint", action="store_true", help="Вывести отпечаток текущих данных public.")
     action.add_argument("--replace-synthetic", metavar="SHA256", help="Подтвердить замену всего синтетического набора public.")
-    default_bin = Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "PostgreSQL" / "15" / "bin"
-    parser.add_argument("--pg-bin", type=Path, default=default_bin)
+    parser.add_argument("--pg-bin", type=Path, default=default_pg_bin())
     args = parser.parse_args()
 
     if args.replace_synthetic and not re.fullmatch(r"[0-9a-f]{64}", args.replace_synthetic):

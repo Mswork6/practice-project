@@ -1,9 +1,8 @@
 from datetime import date
-import re
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Response
-from sqlalchemy import BigInteger, Date, extract, func, literal, or_, select
+from sqlalchemy import Date, extract, func, literal, or_, select
 
 from ..config import local_today
 from ..database import Db, commit
@@ -11,6 +10,7 @@ from ..models import Contract, ContractStatus, ContractType, Counterparty, Prope
 from ..schemas import ContractDetail, ContractExtension, ContractIn, ContractOut, ContractPatch, CounterpartyIn, CounterpartyOut, Id
 from ..schemas import Page, PropertyIn, PropertyOut, PropertyPatch
 from ..schemas import CounterpartyDetail, CounterpartyFields, CounterpartyPatch
+from ..services.counterparty import normalize_tax_id
 from ..services.finance import financial_totals
 from ..services.registry import (
     OPEN_STATES, RENTAL_OBJECT_TYPES, ContractState, compatible, contract_state, property_contracts, property_status,
@@ -117,10 +117,10 @@ def delete_property(id: Id, db: Db):
 def counterparties(db: Db, search: Search = "", page: PageNumber = 1, page_size: PageSize = 20):
     query = counterparty_query(local_today())
     if term := search.strip():
-        tax_term = re.sub(r"[\s-]", "", term) or term
+        tax_term = normalize_tax_id(term) or term
         query = query.where(or_(
             Counterparty.name.icontains(term, autoescape=True),
-            func.regexp_replace(Counterparty.tax_id, r"[[:space:]-]", "", "g").icontains(tax_term, autoescape=True),
+            Counterparty.tax_id.icontains(tax_term, autoescape=True),
         ))
     return paginate(db, query.order_by(Counterparty.name, Counterparty.id), page, page_size, lambda row: counterparty_view(*row))
 
@@ -143,24 +143,18 @@ def counterparty_view(record, total, active):
     )
 
 
-def check_tax_id(db, tax_id, exclude=None):
-    if tax_id is None:
-        return
-    # Serialize matching normalized IDs without changing existing database rows or indexes.
-    db.execute(select(func.pg_advisory_xact_lock(func.hashtext("municipal.tax_id:" + tax_id).cast(BigInteger))))
-    query = select(Counterparty.id).where(func.regexp_replace(Counterparty.tax_id, r"[[:space:]-]", "", "g") == tax_id)
-    if exclude is not None:
-        query = query.where(Counterparty.id != exclude)
-    if db.scalar(query.limit(1)) is not None:
-        raise HTTPException(409, "Контрагент с таким ИНН уже существует.")
+counterparty_constraints = {
+    "unique_counterparty_tax_id": (409, "Контрагент с таким ИНН уже существует."),
+    "valid_counterparty_tax_id": (422, "ИНН должен содержать 10 или 12 цифр."),
+    "tax_id": (422, "Укажите ИНН контрагента."),
+}
 
 
 @router.post("/counterparties", response_model=CounterpartyOut, status_code=201)
 def create_counterparty(data: CounterpartyIn, db: Db):
-    check_tax_id(db, data.tax_id)
     record = Counterparty(**data.model_dump())
     db.add(record)
-    commit(db, "Контрагента не удалось сохранить из-за конфликта данных.")
+    commit(db, "Контрагента не удалось сохранить из-за конфликта данных.", constraints=counterparty_constraints)
     return counterparty_view(record, 0, 0)
 
 
@@ -180,11 +174,9 @@ def counterparty_detail(id: Id, db: Db):
 def update_counterparty(id: Id, data: CounterpartyPatch, db: Db):
     record = require(db, Counterparty, id, "Контрагент не найден.", lock=True)
     values = merge(CounterpartyFields, record, data)
-    if values["tax_id"] != record.tax_id:
-        check_tax_id(db, values["tax_id"], exclude=id)
     for key, value in values.items():
         setattr(record, key, value)
-    commit(db, "Не удалось изменить контрагента.")
+    commit(db, "Не удалось изменить контрагента.", constraints=counterparty_constraints)
     return counterparty_detail(id, db)
 
 

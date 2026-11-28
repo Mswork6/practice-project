@@ -2,7 +2,7 @@ from datetime import date
 from decimal import Decimal
 from enum import StrEnum
 
-from sqlalchemy import CheckConstraint, Date, Enum, ForeignKey, Numeric, String, Text
+from sqlalchemy import CheckConstraint, Date, Enum, ForeignKey, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from .config import local_today
@@ -65,11 +65,15 @@ class Property(Base):
 
 class Counterparty(Base):
     __tablename__ = "counterparties"
+    __table_args__ = (
+        UniqueConstraint("tax_id", name="unique_counterparty_tax_id"),
+        CheckConstraint("tax_id ~ '^([0-9]{10}|[0-9]{12})$'", name="valid_counterparty_tax_id"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(200))
-    tax_id: Mapped[str | None] = mapped_column(String(20))
-    contact: Mapped[str | None] = mapped_column(String(250))
+    tax_id: Mapped[str] = mapped_column(String(20))
+    email: Mapped[str | None] = mapped_column(String(250))
 
 
 class Contract(Base):
