@@ -1,13 +1,20 @@
+from datetime import date
+import re
+from typing import Literal
+
 from fastapi import APIRouter, HTTPException, Response
-from sqlalchemy import Date, literal, or_, select
+from sqlalchemy import BigInteger, Date, extract, func, literal, or_, select
 
 from ..config import local_today
 from ..database import Db, commit
 from ..models import Contract, ContractStatus, ContractType, Counterparty, Property, PropertyStatus, PropertyType
-from ..schemas import ContractExtension, ContractIn, ContractOut, ContractPatch, CounterpartyIn, CounterpartyOut, Id
+from ..schemas import ContractDetail, ContractExtension, ContractIn, ContractOut, ContractPatch, CounterpartyIn, CounterpartyOut, Id
 from ..schemas import Page, PropertyIn, PropertyOut, PropertyPatch
+from ..schemas import CounterpartyDetail, CounterpartyFields, CounterpartyPatch
+from ..services.finance import financial_totals
 from ..services.registry import (
     OPEN_STATES, RENTAL_OBJECT_TYPES, ContractState, compatible, contract_state, property_contracts, property_status,
+    remaining_term,
 )
 from .common import PageNumber, PageSize, Search, merge, paginate, require
 
@@ -108,26 +115,84 @@ def delete_property(id: Id, db: Db):
 
 @router.get("/counterparties", response_model=Page[CounterpartyOut])
 def counterparties(db: Db, search: Search = "", page: PageNumber = 1, page_size: PageSize = 20):
-    query = select(Counterparty)
+    query = counterparty_query(local_today())
     if term := search.strip():
+        tax_term = re.sub(r"[\s-]", "", term) or term
         query = query.where(or_(
             Counterparty.name.icontains(term, autoescape=True),
-            Counterparty.tax_id.icontains(term, autoescape=True),
+            func.regexp_replace(Counterparty.tax_id, r"[[:space:]-]", "", "g").icontains(tax_term, autoescape=True),
         ))
-    return paginate(db, query.order_by(Counterparty.name, Counterparty.id), page, page_size, lambda row: row[0])
+    return paginate(db, query.order_by(Counterparty.name, Counterparty.id), page, page_size, lambda row: counterparty_view(*row))
+
+
+def counterparty_query(today):
+    counts = select(
+        Contract.counterparty_id,
+        func.count().label("total"),
+        func.count().filter(contract_state(today) == ContractState.ACTIVE).label("active"),
+    ).group_by(Contract.counterparty_id).subquery()
+    return select(Counterparty, func.coalesce(counts.c.total, 0), func.coalesce(counts.c.active, 0)).outerjoin(
+        counts, counts.c.counterparty_id == Counterparty.id,
+    )
+
+
+def counterparty_view(record, total, active):
+    return CounterpartyOut(
+        **CounterpartyFields.model_validate(record).model_dump(), id=record.id,
+        contract_count=total, active_contract_count=active,
+    )
+
+
+def check_tax_id(db, tax_id, exclude=None):
+    if tax_id is None:
+        return
+    # Serialize matching normalized IDs without changing existing database rows or indexes.
+    db.execute(select(func.pg_advisory_xact_lock(func.hashtext("municipal.tax_id:" + tax_id).cast(BigInteger))))
+    query = select(Counterparty.id).where(func.regexp_replace(Counterparty.tax_id, r"[[:space:]-]", "", "g") == tax_id)
+    if exclude is not None:
+        query = query.where(Counterparty.id != exclude)
+    if db.scalar(query.limit(1)) is not None:
+        raise HTTPException(409, "Контрагент с таким ИНН уже существует.")
 
 
 @router.post("/counterparties", response_model=CounterpartyOut, status_code=201)
 def create_counterparty(data: CounterpartyIn, db: Db):
+    check_tax_id(db, data.tax_id)
     record = Counterparty(**data.model_dump())
     db.add(record)
     commit(db, "Контрагента не удалось сохранить из-за конфликта данных.")
-    return record
+    return counterparty_view(record, 0, 0)
 
 
-@router.get("/counterparties/{id}", response_model=CounterpartyOut)
+@router.get("/counterparties/{id}", response_model=CounterpartyDetail)
 def counterparty_detail(id: Id, db: Db):
-    return require(db, Counterparty, id, "Контрагент не найден.")
+    today = local_today()
+    row = db.execute(counterparty_query(today).where(Counterparty.id == id)).one_or_none()
+    if row is None:
+        raise HTTPException(404, "Контрагент не найден.")
+    return CounterpartyDetail(
+        **counterparty_view(*row).model_dump(),
+        finance=financial_totals(db, Contract.counterparty_id == id, today),
+    )
+
+
+@router.patch("/counterparties/{id}", response_model=CounterpartyDetail)
+def update_counterparty(id: Id, data: CounterpartyPatch, db: Db):
+    record = require(db, Counterparty, id, "Контрагент не найден.", lock=True)
+    values = merge(CounterpartyFields, record, data)
+    if values["tax_id"] != record.tax_id:
+        check_tax_id(db, values["tax_id"], exclude=id)
+    for key, value in values.items():
+        setattr(record, key, value)
+    commit(db, "Не удалось изменить контрагента.")
+    return counterparty_detail(id, db)
+
+
+@router.delete("/counterparties/{id}", status_code=204)
+def delete_counterparty(id: Id, db: Db):
+    db.delete(require(db, Counterparty, id, "Контрагент не найден.", lock=True))
+    commit(db, "Контрагента нельзя удалить, пока с ним связаны договоры.")
+    return Response(status_code=204)
 
 
 def contract_query(today):
@@ -151,12 +216,15 @@ def contract_view(record, property_name, counterparty_name, state, property_stat
 def contracts(
     db: Db, search: Search = "", type: ContractType | None = None, status: ContractStatus | None = None,
     state: ContractState | None = None,
-    property_id: Id | None = None, page: PageNumber = 1, page_size: PageSize = 20,
+    property_id: Id | None = None, counterparty_id: Id | None = None,
+    term: Literal["0-30", "31-90", "91-180", "181+"] | None = None, expiry_month: str | None = None,
+    sort: Literal["start_asc", "start_desc", "end_asc", "end_desc"] | None = None,
+    page: PageNumber = 1, page_size: PageSize = 20,
 ):
     today = local_today()
     query = contract_query(today)
-    if term := search.strip():
-        query = query.where(or_(*(field.icontains(term, autoescape=True) for field in (
+    if keyword := search.strip():
+        query = query.where(or_(*(field.icontains(keyword, autoescape=True) for field in (
             Contract.number, Property.name, Counterparty.name,
         ))))
     if type is not None:
@@ -167,12 +235,35 @@ def contracts(
         query = query.where(contract_state(today) == state)
     if property_id is not None:
         query = query.where(Contract.property_id == property_id)
+    if counterparty_id is not None:
+        query = query.where(Contract.counterparty_id == counterparty_id)
+    if term or expiry_month is not None:
+        query = query.where(contract_state(today) == ContractState.ACTIVE)
+        sort = sort or "end_asc"
+    if term:
+        query = query.where(remaining_term(today, term))
+    if expiry_month is not None:
+        try:
+            month = date.fromisoformat(expiry_month + "-01")
+            if expiry_month != month.isoformat()[:7]:
+                raise ValueError
+        except ValueError:
+            raise HTTPException(422, "Укажите месяц окончания в формате ГГГГ-ММ.") from None
+        query = query.where(extract("year", Contract.end_date) == month.year, extract("month", Contract.end_date) == month.month)
+    ordering = {
+        "start_asc": Contract.start_date.asc(), "start_desc": Contract.start_date.desc(),
+        "end_asc": Contract.end_date.asc().nulls_last(), "end_desc": Contract.end_date.desc().nulls_last(),
+    }
+    if sort:
+        query = query.order_by(ordering[sort])
     return paginate(db, query.order_by(Contract.id.desc()), page, page_size, lambda row: contract_view(*row, today))
 
 
-@router.get("/contracts/{id}", response_model=ContractOut)
+@router.get("/contracts/{id}", response_model=ContractDetail)
 def contract_detail(id: Id, db: Db):
-    return load_contract(db, id, local_today())
+    today = local_today()
+    result = load_contract(db, id, today)
+    return ContractDetail(**result.model_dump(), finance=financial_totals(db, Contract.id == id, today))
 
 
 def load_contract(db, id, today):

@@ -11,25 +11,14 @@ const colors = ['#eac16c', '#7eb896', '#709fd5', '#b195ce'];
 const percent = new Intl.NumberFormat('ru-RU', { style: 'percent', maximumFractionDigits: 1 });
 
 let selected = 'income';
-let financialPeriod = 'last12';
-let financialYear = Number(today().slice(0, 4));
 let cachedDashboard;
 const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
 
-function dashboardParams() {
-  return { period: financialPeriod, year: financialPeriod === 'year' ? financialYear : null };
-}
-
 export function mountDashboard(root) {
+  let financialYear = Number(today().slice(0, 4));
   root.innerHTML = `
     <header class="page-header">
       <div><h1>Дашборд имущества</h1><p class="subheading">Поступления, реестр и сроки договоров</p></div>
-      <form class="period-controls">
-        <label><span>Финансовый период</span><select name="period">
-          <option value="last12">Последние 12 месяцев</option><option value="year">Календарный год</option><option value="all">Всё время</option>
-        </select></label>
-        <label class="year-control" hidden><span>Год</span><input name="year" type="number" step="1" min="1" value="${financialYear}" max="${today().slice(0, 4)}" required></label>
-      </form>
     </header>
     <div class="dashboard-data is-pending">
     <div class="kpi-grid" role="group" aria-label="Показатели дашборда">
@@ -44,7 +33,9 @@ export function mountDashboard(root) {
     <div class="live-message" aria-live="polite" hidden></div>
     <div class="analytics" id="analytics" aria-live="polite" aria-atomic="false">
       <section class="panel" aria-labelledby="trend-title">
-        <div class="panel-heading"><h2 id="trend-title"></h2><p id="trend-subtitle"></p></div>
+        <div class="panel-heading trend-heading"><div><h2 id="trend-title"></h2><p id="trend-subtitle"></p></div>
+          <label class="year-control" hidden><span>Год доходов</span><select name="year"></select></label>
+        </div>
         <div class="chart-trend">
           <canvas id="trend-chart" role="img"></canvas>
           <span class="chart-empty" id="trend-empty" hidden>Нет данных за этот период</span>
@@ -63,21 +54,19 @@ export function mountDashboard(root) {
     </div>
     </div>`;
 
-  const form = root.querySelector('form');
-  const period = form.elements.period;
-  const year = form.elements.year;
+  const year = root.querySelector('select[name=year]');
   const message = root.querySelector('.live-message');
   const dashboardData = root.querySelector('.dashboard-data');
   const analytics = root.querySelector('#analytics');
   const cards = [...root.querySelectorAll('.kpi')];
   let controller;
-  let data = cachedDashboard?.key === JSON.stringify(dashboardParams()) ? cachedDashboard.payload : null;
+  let data = cachedDashboard?.key === String(financialYear) ? cachedDashboard.payload : null;
   let charts = [];
   let trendReveal;
 
   function clearCharts() {
     trendReveal?.cancel();
-    charts.forEach((chart) => chart.destroy());
+    charts.forEach((chart) => { chart.canvas.style.cursor = ''; chart.destroy(); });
     charts = [];
   }
 
@@ -98,12 +87,16 @@ export function mountDashboard(root) {
   function render() {
     clearCharts();
     const mode = modes[selected];
+    const chartColors = selected === 'renewals' ? ['#f09093', '#eac16c', '#709fd5', '#7eb896'] : colors;
+    year.closest('label').hidden = selected !== 'income';
+    year.innerHTML = (data?.income_years ?? [financialYear]).map(value => `<option>${value}</option>`).join('');
+    year.value = financialYear;
     const panel = data?.panels[selected];
     const format = mode.financial ? money : number;
     root.querySelector('#trend-title').textContent = mode.trend;
     root.querySelector('#structure-title').textContent = mode.structure;
     root.querySelector('#trend-subtitle').textContent = data ? {
-      income: dateRange(data),
+      income: data.panels.income.trend.some(point => point.future) ? 'Поступления по месяцам · серые подписи — будущие месяцы' : 'Поступления по месяцам',
       debt: 'На конец месяца · текущий месяц на дату среза',
       properties: 'Последние 12 календарных месяцев',
       renewals: `${date(data.contract_start)} — ${date(data.contract_end)} · действующие договоры`,
@@ -117,7 +110,7 @@ export function mountDashboard(root) {
 
     const trendCanvas = root.querySelector('#trend-chart');
     const structureCanvas = root.querySelector('#structure-chart');
-    const hasTrend = panel?.trend.some(({ value }) => Number(value) !== 0);
+    const hasTrend = panel && (selected === 'income' || panel.trend.some(({ value }) => Number(value) !== 0));
     const total = panel?.structure.reduce((sum, { value }) => sum + Number(value), 0) ?? 0;
     trendCanvas.hidden = !hasTrend;
     structureCanvas.hidden = !total;
@@ -125,16 +118,19 @@ export function mountDashboard(root) {
     root.querySelector('#structure-empty').hidden = !panel || total !== 0;
     root.querySelector('.legend').innerHTML = panel?.structure.map(({ label, value }, index) => `
       <li title="${escape(format(value))}">
-        <span class="legend-dot" style="background:${colors[index]}" aria-hidden="true"></span>
+        ${selected === 'renewals' && Number(value) ? `<a class="legend-link" href="${contractLink('term', panel.structure[index].key)}">` : ''}
+        <span class="legend-dot" style="background:${chartColors[index]}" aria-hidden="true"></span>
         <span>${escape(label)}</span><strong>${total ? percent.format(Number(value) / total) : '0%'}</strong>
+        ${selected === 'renewals' && Number(value) ? '</a>' : ''}
       </li>`).join('') ?? '';
 
     if (!panel) return;
     if (hasTrend) {
-      trendCanvas.setAttribute('aria-label', `${mode.trend}. ${panel.trend.map(({ label, value }) => `${label}, ${format(value)}`).join('; ')}.`);
-      const chart = new Chart(trendCanvas, trendConfig(mode, panel.trend, format));
+      trendCanvas.setAttribute('aria-label', `${mode.trend}. ${panel.trend.map(({ label, value, future }) =>
+        `${label}, ${future ? 'будущий месяц' : format(value)}`).join('; ')}.`);
+      const chart = new Chart(trendCanvas, selected === 'debt' ? trendConfig(mode, panel.trend, format) : barConfig(mode, panel.trend, format));
       charts.push(chart);
-      if (!reducedMotion.matches) {
+      if (selected === 'debt' && !reducedMotion.matches) {
         trendReveal = trendCanvas.animate(
           { clipPath: ['inset(0 100% 0 0)', 'inset(0 0 0 0)'] },
           { duration: 620, easing: 'cubic-bezier(.25, .65, .35, 1)' },
@@ -144,7 +140,7 @@ export function mountDashboard(root) {
     if (total) {
       const totalLabel = mode.financial ? compactMoney(total) : number(total);
       structureCanvas.setAttribute('aria-label', `${mode.structure}. Всего ${format(total)}. ${panel.structure.map(({ label, value }) => `${label}, ${format(value)}`).join('; ')}.`);
-      charts.push(new Chart(structureCanvas, breakdownConfig(panel.structure, format, total, totalLabel)));
+      charts.push(new Chart(structureCanvas, breakdownConfig(panel.structure, format, total, totalLabel, chartColors, selected === 'renewals')));
     }
   }
 
@@ -163,7 +159,7 @@ export function mountDashboard(root) {
       value.textContent = modes[key].financial ? compactMoney(amount) : number(amount);
       value.title = modes[key].financial ? money(amount) : number(amount);
       context.textContent = {
-        income: dateRange(data), debt: `На ${date(data.as_of)}`,
+        income: `За ${data.period_start.slice(0, 4)} год`, debt: `На ${date(data.as_of)}`,
         properties: `На ${date(data.as_of)}`, renewals: 'Окончание в ближайшие 180 дней',
       }[key];
     }
@@ -173,8 +169,8 @@ export function mountDashboard(root) {
     controller?.abort();
     controller = new AbortController();
     const { signal } = controller;
-    const params = dashboardParams();
-    const key = JSON.stringify(params);
+    const params = { year: financialYear };
+    const key = String(financialYear);
     analytics.setAttribute('aria-busy', 'true');
     if (!data) showMessage('Загрузка показателей…');
     try {
@@ -189,6 +185,7 @@ export function mountDashboard(root) {
       showMessage('');
     } catch (error) {
       if (signal.aborted) return;
+      if (data) { financialYear = Number(data.period_start.slice(0, 4)); year.value = financialYear; }
       showMessage(data ? `${error.message} Показаны последние полученные данные.` : error.message, true);
     } finally {
       if (!signal.aborted) analytics.setAttribute('aria-busy', 'false');
@@ -203,23 +200,10 @@ export function mountDashboard(root) {
     reveal(analytics, { duration: 360, offset: 0 });
   }));
 
-  period.value = financialPeriod;
-  year.closest('label').hidden = financialPeriod !== 'year';
-  form.addEventListener('submit', (event) => { event.preventDefault(); changePeriod(); });
-  period.addEventListener('change', changePeriod);
-  year.addEventListener('change', changePeriod);
-
-  function changePeriod() {
-    year.closest('label').hidden = period.value !== 'year';
-    if (period.value === 'year' && !year.reportValidity()) return;
-    const previousKey = JSON.stringify(dashboardParams());
-    financialPeriod = period.value;
-    if (financialPeriod === 'year') financialYear = year.valueAsNumber;
-    if (previousKey === JSON.stringify(dashboardParams())) return;
-    data = null;
-    showData();
+  year.addEventListener('change', () => {
+    financialYear = Number(year.value);
     load();
-  }
+  });
 
   function showData() {
     dashboardData.classList.toggle('is-pending', !data);
@@ -294,6 +278,53 @@ function trendConfig(mode, points, format) {
   };
 }
 
+function contractLink(key, value) {
+  return '#contracts?' + new URLSearchParams({ [key]: value });
+}
+
+function linksToContracts(points, key) {
+  const enabled = elements => elements.length && Number(points[elements[0].index].value) > 0;
+  return {
+    onHover(event, elements, chart) {
+      chart.canvas.style.cursor = enabled(elements) ? 'pointer' : '';
+    },
+    onClick(event, elements) {
+      if (enabled(elements)) location.hash = contractLink(key, points[elements[0].index].key);
+    },
+  };
+}
+
+function barConfig(mode, points, format) {
+  const line = trendConfig(mode, points, format);
+  return {
+    type: 'bar',
+    data: {
+      labels: line.data.labels,
+      datasets: [{
+        data: points.map(point => point.future ? null : Number(point.value)),
+        backgroundColor: mode.color + 'bf',
+        hoverBackgroundColor: mode.color,
+        borderRadius: 3,
+        maxBarThickness: 48,
+      }],
+    },
+    options: {
+      ...line.options,
+      animation: reducedMotion.matches ? false : { duration: 450, easing: 'easeOutCubic' },
+      interaction: { mode: 'nearest', intersect: true },
+      ...(mode === modes.renewals ? linksToContracts(points, 'expiry_month') : {}),
+      scales: {
+        ...line.options.scales,
+        x: {
+          ...line.options.scales.x,
+          ticks: { ...line.options.scales.x.ticks, maxTicksLimit: 12,
+            color: ({ index }) => points[index]?.future ? '#717381' : '#d0d2dd' },
+        },
+      },
+    },
+  };
+}
+
 function drawBreakdownTotal(chart, label) {
   const { ctx } = chart;
   const { x, y, innerRadius } = chart.getDatasetMeta(0).data[0];
@@ -326,7 +357,7 @@ function drawBreakdownTotal(chart, label) {
   ctx.restore();
 }
 
-function breakdownConfig(points, format, total, totalLabel) {
+function breakdownConfig(points, format, total, totalLabel, chartColors, interactive) {
   return {
     type: 'doughnut',
     plugins: [{
@@ -338,12 +369,13 @@ function breakdownConfig(points, format, total, totalLabel) {
     data: {
       labels: points.map(({ label }) => label),
       datasets: [{
-        data: points.map(({ value }) => Number(value)), backgroundColor: colors,
+        data: points.map(({ value }) => Number(value)), backgroundColor: chartColors,
         borderWidth: 2, borderColor: '#191b21', hoverOffset: 6,
       }],
     },
     options: {
       responsive: true, maintainAspectRatio: false, cutout: '73%',
+      ...(interactive ? linksToContracts(points, 'term') : {}),
       animation: reducedMotion.matches ? false : { duration: 620, easing: 'easeOutCubic' },
       layout: { padding: 5 },
       plugins: {

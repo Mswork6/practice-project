@@ -10,8 +10,18 @@ const host = dialog.querySelector('#dialog-content');
 const closeButton = dialog.querySelector('#dialog-close');
 const frames = [];
 let backdropPress = false;
+let retiring;
+let sizing;
+const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
 
 const top = () => frames.at(-1);
+
+function resizeFrom(height) {
+  sizing?.cancel();
+  const target = dialog.getBoundingClientRect().height;
+  if (!height || reducedMotion.matches || Math.abs(target - height) < 1) return;
+  sizing = dialog.animate({ height: [`${height}px`, `${target}px`] }, { duration: 160, easing: 'ease-out' });
+}
 
 function isBackdrop(event) {
   if (event.target !== dialog) return false;
@@ -44,20 +54,34 @@ function activate(frame, focus, scrollTop = 0) {
 
 function pop(count = 1, changed = false) {
   closeLookup();
+  const height = dialog.getBoundingClientRect().height;
+  const outgoing = top();
   let removed;
   for (let i = 0; i < count && frames.length; i++) {
     removed = frames.pop();
-    removed.content.remove();
+    if (removed !== outgoing) removed.content.remove();
   }
   if (changed) frames.forEach((frame) => { frame.stale = true; });
 
   const parent = top();
   if (!parent) {
+    sizing?.cancel();
+    retiring = outgoing.content;
+    const node = retiring;
+    node.inert = true;
     dialog.close();
+    requestAnimationFrame(() => {
+      Promise.allSettled(dialog.getAnimations().map(animation => animation.finished)).then(() => {
+        node.remove();
+        if (retiring === node) retiring = null;
+      });
+    });
     if (removed.opener?.isConnected) removed.opener.focus({ preventScroll: true });
     return;
   }
+  outgoing.content.remove();
   activate(parent, removed.opener, parent.scrollTop);
+  resizeFrom(height);
   reveal(parent.content);
   if (parent.stale && parent.refresh) {
     parent.stale = false;
@@ -93,10 +117,16 @@ export function closeDialog() {
 
 export function openDialog(heading, html) {
   closeLookup();
+  retiring?.remove();
+  retiring = null;
   const parent = top();
+  const height = parent ? dialog.getBoundingClientRect().height : 0;
   const frame = { heading, opener: document.activeElement, content: document.createElement('div'), busy: false };
   frame.content.innerHTML = html;
   if (parent) {
+    if (frame.content.querySelector(':scope > [role=status]')) {
+      frame.content.style.minHeight = `${Math.min(parent.content.offsetHeight, host.clientHeight, height * .75)}px`;
+    }
     parent.scrollTop = dialog.scrollTop;
     parent.content.hidden = true;
   }
@@ -104,7 +134,7 @@ export function openDialog(heading, html) {
   frames.push(frame);
   if (!dialog.open) dialog.showModal();
   activate(frame);
-  if (parent) reveal(frame.content);
+  if (parent) { resizeFrom(height); reveal(frame.content); }
 
   return {
     content: frame.content,
@@ -113,11 +143,14 @@ export function openDialog(heading, html) {
       if (!frames.includes(frame)) return false;
       frame.heading = newHeading;
       const active = top() === frame;
+      const height = active ? dialog.getBoundingClientRect().height : 0;
       const restore = active && frame.content.contains(document.activeElement);
       frame.content.innerHTML = newHtml;
+      frame.content.style.minHeight = '';
       if (active) {
         title.textContent = newHeading;
         if (restore) closeButton.focus({ preventScroll: true });
+        resizeFrom(height);
         reveal(frame.content);
       }
       return true;
@@ -175,9 +208,7 @@ export function bindForm(view, onSubmit, { guard = true, closeParent = false, ch
   const form = view.content.querySelector('form');
   const submitButton = form.querySelector('[type="submit"]');
   const cancel = form.querySelector('[data-cancel]');
-  const snapshot = () => JSON.stringify([
-    ...new FormData(form), ...Array.from(form.querySelectorAll('[data-party-field]'), (input) => input.value),
-  ]);
+  const snapshot = () => JSON.stringify([...new FormData(form)]);
   if (guard) queueMicrotask(() => {
     const initial = snapshot();
     view.guard(() => snapshot() !== initial);

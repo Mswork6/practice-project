@@ -80,7 +80,7 @@ def make_properties(random: Random, today: date):
 
 
 def tax_number(index, individual):
-    digits = [int(digit) for digit in f"{index + 7450110:0{11 if individual else 9}d}"]
+    digits = [int(digit) for digit in f"{index + 7450110:0{10 if individual else 9}d}"]
     if individual:
         digits.append(sum(a * b for a, b in zip(digits, (7, 2, 4, 10, 3, 5, 9, 4, 6, 8))) % 11 % 10)
         weights = (3, 7, 2, 4, 10, 3, 5, 9, 4, 6, 8)

@@ -3,7 +3,7 @@ import { pagedTable } from './paged-table.js';
 
 export const recordButton = (record, label) => `<button type="button" class="text-button" data-record="${record.id}">${escape(label)}</button>`;
 
-export function mountRegistry(root, config) {
+export function mountRegistry(root, config, initial) {
   root.innerHTML = `
     <header class="page-header">
       <div><h1>${config.title}</h1><p class="subheading">${config.subtitle}</p></div>
@@ -16,16 +16,20 @@ export function mountRegistry(root, config) {
         </span></label>
         ${config.filters.map(([field, label, values, placeholder]) => `<label>
           <span>${label}</span><select name="${field}">${options(values, '', placeholder)}</select></label>`).join('')}
+        ${config.filterControls ?? ''}
       </form>
       <div class="registry-results"></div>
     </section>`;
   const filters = root.querySelector('.filters');
   const results = root.querySelector('.registry-results');
+  config.setupFilters?.(filters, initial, () => reset());
   const table = pagedTable(results, {
     ...config,
     params: () => Object.fromEntries(new FormData(filters)),
     empty: 'Записи не найдены.',
     onClick: (id) => config.detail(id, table.load),
+    sortValue: () => filters.elements.sort?.value ?? '',
+    onSort: (value) => { filters.elements.sort.value = value; reset(); },
   });
   let searchTimer;
 

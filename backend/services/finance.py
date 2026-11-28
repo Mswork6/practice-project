@@ -2,12 +2,12 @@ from datetime import date
 from decimal import Decimal
 
 from fastapi import HTTPException
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
 from ..database import commit
-from ..models import Accrual, Payment
-from ..schemas import PaymentIn
+from ..models import Accrual, Contract, Payment
+from ..schemas import FinancialTotals, PaymentIn
 
 ZERO = Decimal("0.00")
 
@@ -21,6 +21,19 @@ def payments_through(cutoff=None, *correlates):
 
 def overdue_balance(cutoff, *correlates):
     return func.greatest(ZERO, Accrual.amount - payments_through(cutoff, *correlates))
+
+
+def financial_totals(db, scope, today):
+    received = payments_through(today)
+    balance = overdue_balance(today)
+    query = (
+        select(*(func.coalesce(func.sum(column), ZERO) for column in (
+            Accrual.amount, received, balance, case((Accrual.due_date < today, balance), else_=ZERO),
+        )))
+        .select_from(Accrual).join(Contract, Accrual.contract_id == Contract.id).where(scope)
+    )
+    billed, paid, remaining, overdue = db.execute(query).one()
+    return FinancialTotals(billed=billed, paid=paid, remaining=remaining, overdue=overdue)
 
 
 def lock_accrual(db: Session, id: int):

@@ -109,7 +109,8 @@ def test_successor_is_atomic_and_preserves_earlier_history(client):
                           ({"property_id": 9999}, 404), ({"note": "А" * 3000}, 422)]:
         result = client.post(f"{url}/successor", json={**successor, **invalid})
         assert result.status_code == code
-        assert client.get(url).json() == old
+        detail = client.get(url).json()
+        assert {key: detail[key] for key in old} == old
     assert client.get("/api/contracts").json()["total"] == 1
 
     result = client.post(f"{url}/successor", json=successor)
@@ -117,7 +118,8 @@ def test_successor_is_atomic_and_preserves_earlier_history(client):
     new = result.json()
     assert new["id"] != old["id"] and new["state"] == "active"
     assert new["note"] == f"На основе договора № {old['number']}.\nНовая сделка"
-    assert client.get(url).json() == {**old, "status": "completed", "state": "completed"}
+    detail = client.get(url).json()
+    assert {key: detail[key] for key in old} == {**old, "status": "completed", "state": "completed"}
     assert client.get(f"/api/accruals?contract_id={new['id']}").json()["total"] == 0
     assert_payment(client, payment)
     assert Decimal(chart(client)["kpis"]["debt"]) == 75

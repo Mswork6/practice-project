@@ -1,12 +1,13 @@
 import { mountDashboard } from './dashboard.js';
 import { contracts } from './contracts.js';
+import { counterparties } from './counterparties.js';
 import { closeDialog } from './dialog.js';
 import { finance } from './finance.js';
 import { properties } from './properties.js';
 import { mountRegistry } from './registry.js';
 import { icon, reveal, setAppDate, today } from './ui.js';
 
-const routes = { properties, contracts, finance };
+const routes = { properties, contracts, counterparties, finance };
 const root = document.querySelector('#content');
 let cleanup;
 let renderedHash = location.hash;
@@ -25,14 +26,14 @@ function route(focus = false) {
   }
   renderedHash = location.hash;
   cleanup?.();
-  const hash = window.location.hash.slice(1);
+  const [hash, query] = window.location.hash.slice(1).split('?');
   const selected = Object.hasOwn(routes, hash) ? hash : 'dashboard';
   document.querySelectorAll('[data-route]').forEach((link) => {
     if (link.dataset.route === selected) link.setAttribute('aria-current', 'page');
     else link.removeAttribute('aria-current');
   });
   document.title = `${routes[selected]?.title ?? 'Дашборд'} | Муниципальное имущество`;
-  cleanup = selected === 'dashboard' ? mountDashboard(root) : mountRegistry(root, routes[selected]);
+  cleanup = selected === 'dashboard' ? mountDashboard(root) : mountRegistry(root, routes[selected], new URLSearchParams(query));
   if (focus) {
     window.scrollTo(0, 0);
     root.focus({ preventScroll: true });

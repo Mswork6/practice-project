@@ -1,13 +1,13 @@
 from calendar import monthrange
 from datetime import date, timedelta
 
-from sqlalchemy import Date, cast, column, func, select, values
+from sqlalchemy import Date, cast, column, extract, func, select, values
 from sqlalchemy.orm import Session
 
 from ..models import Accrual, Contract, ContractType, Payment, Property, PropertyStatus, PropertyType
 from ..schemas import Dashboard, KPIs, Panel, Period, Point
 from .finance import ZERO, overdue_balance
-from .registry import ContractState, contract_state
+from .registry import TERM_RANGES, ContractState, contract_state, remaining_term
 
 MONTHS = ("Янв", "Фев", "Мар", "Апр", "Май", "Июн", "Июл", "Авг", "Сен", "Окт", "Ноя", "Дек")
 CONTRACT_LABELS = dict(zip(ContractType, ("Аренда недвижимости", "Аренда земли", "Продажа имущества", "Прочие")))
@@ -44,8 +44,9 @@ def month_key(day):
     return cast(func.date_trunc("month", day), Date)
 
 
-def trend(months, records, default=0):
-    return [Point(label=f"{MONTHS[month.month - 1]} {month.year}", value=records.get(month, default)) for month in months]
+def trend(months, records, default=0, *, cutoff=None):
+    return [Point(label=f"{MONTHS[month.month - 1]} {month.year}", value=records.get(month, default),
+                  key=month.isoformat()[:7], future=cutoff is not None and month > cutoff) for month in months]
 
 
 def structure(labels, records, default=0):
@@ -65,7 +66,7 @@ def income_panel(db, start, end, months):
         .where(window).group_by(Contract.type)
     ).all())
     return sum(by_type.values(), ZERO), Panel(
-        trend=trend(months, amounts, ZERO), structure=structure(CONTRACT_LABELS, by_type, ZERO),
+        trend=trend(months, amounts, ZERO, cutoff=end), structure=structure(CONTRACT_LABELS, by_type, ZERO),
     )
 
 
@@ -116,29 +117,31 @@ def contract_panel(db, today):
         .where(contract_state(today) == ContractState.ACTIVE, Contract.end_date.between(today, end))
         .group_by(month)
     ).all())
-    remaining = Contract.end_date - today
-    intervals = ((0, 30), (31, 90), (91, 180))
     counts = db.execute(
         select(
-            *(func.count().filter(remaining.between(first, last)) for first, last in intervals),
-            func.count().filter(remaining >= 181),
+            *(func.count().filter(remaining_term(today, term)) for term in TERM_RANGES),
         ).select_from(Contract).where(contract_state(today) == ContractState.ACTIVE)
     ).one()
     return sum(counts[:3]), end, Panel(
         trend=trend(months_between(today, end), endings),
-        structure=[Point(label=label, value=count) for label, count in zip(TERM_LABELS, counts)],
+        structure=[Point(label=label, value=count, key=term) for label, count, term in zip(TERM_LABELS, counts, TERM_RANGES)],
     )
 
 
-def calculate(db: Session, period: Period, year: int | None, today: date) -> Dashboard:
+def calculate(db: Session, period: Period, year: int | None, today: date, *, calendar_dashboard=False) -> Dashboard:
     start, end = financial_range(db, period, year, today)
     months = months_between(start, end)
-    income, income_data = income_panel(db, start, end, months)
-    debt, debt_data = debt_panel(db, today, end, months)
+    income_months = months_between(start, date(start.year, 12, 31)) if calendar_dashboard else months
+    income, income_data = income_panel(db, start, end, income_months)
+    debt_months = months_between(shift_month(today, -11), today) if calendar_dashboard else months
+    debt, debt_data = debt_panel(db, today, today if calendar_dashboard else end, debt_months)
     properties, property_data = property_panel(db, today)
     renewals, contract_end, contract_data = contract_panel(db, today)
+    year_expr = extract("year", Payment.payment_date)
+    years = set(db.scalars(select(year_expr).where(Payment.payment_date <= today).distinct())) if calendar_dashboard else set()
     return Dashboard(
         as_of=today, period_start=start, period_end=end, contract_start=today, contract_end=contract_end,
         kpis=KPIs(income=income, debt=debt, properties=properties, renewals=renewals),
         panels={"income": income_data, "debt": debt_data, "properties": property_data, "renewals": contract_data},
+        income_years=sorted(years | {today.year}, reverse=True) if calendar_dashboard else [],
     )

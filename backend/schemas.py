@@ -2,7 +2,8 @@ from datetime import date
 from decimal import Decimal
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator, model_validator
+import re
 
 from .models import ContractStatus, ContractType, PropertyStatus, PropertyType
 from .services.registry import ContractState
@@ -41,14 +42,45 @@ class PropertyOut(PropertyIn):
     can_archive: bool
 
 
-class CounterpartyIn(Schema):
+class CounterpartyFields(Schema):
     name: Name
     tax_id: Annotated[str, StringConstraints(max_length=20)] | None = None
     contact: Annotated[str, StringConstraints(max_length=250)] | None = None
 
 
-class CounterpartyOut(CounterpartyIn):
+class CounterpartyPatch(CounterpartyFields):
+    name: Name | None = None
+
+    @field_validator("tax_id", mode="before")
+    @classmethod
+    def normalize_tax_id(cls, value):
+        if isinstance(value, str):
+            value = re.sub(r"[\s-]", "", value)
+            if value and not re.fullmatch(r"[0-9]{10}|[0-9]{12}", value):
+                raise ValueError("ИНН должен содержать 10 или 12 цифр.")
+            return value or None
+        return value
+
+
+class CounterpartyIn(CounterpartyPatch):
+    name: Name
+
+
+class CounterpartyOut(CounterpartyFields):
     id: Id
+    contract_count: int
+    active_contract_count: int
+
+
+class FinancialTotals(Schema):
+    billed: Decimal
+    paid: Decimal
+    remaining: Decimal
+    overdue: Decimal
+
+
+class CounterpartyDetail(CounterpartyOut):
+    finance: FinancialTotals
 
 
 class ContractPatch(Schema):
@@ -86,6 +118,10 @@ class ContractOut(ContractIn):
     days_remaining: int | None
     state: ContractState
     property_archived: bool
+
+
+class ContractDetail(ContractOut):
+    finance: FinancialTotals
 
 
 class ContractExtension(Schema):
@@ -155,6 +191,8 @@ class Page[Item](Schema):
 class Point(Schema):
     label: str
     value: Decimal | int
+    key: str | None = None
+    future: bool = False
 
 
 class Panel(Schema):
@@ -177,3 +215,4 @@ class Dashboard(Schema):
     contract_end: date
     kpis: KPIs
     panels: dict[str, Panel]
+    income_years: list[int] = Field(default_factory=list)

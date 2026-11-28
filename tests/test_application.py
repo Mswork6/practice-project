@@ -35,7 +35,7 @@ def assert_payment(client, payment):
 
 def create_agreement(client, **changes):
     prop = create(client, "properties", PROPERTY)
-    party = create(client, "counterparties", {"name": "Тестовый контрагент", "tax_id": "660076500000"})
+    party = create(client, "counterparties", {"name": "Тестовый контрагент"})
     body = {**CONTRACT, "property_id": prop["id"], "counterparty_id": party["id"], **changes}
     return create(client, "contracts", body), body
 

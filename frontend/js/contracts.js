@@ -1,53 +1,64 @@
 import { api } from './api.js';
 import { bindForm, bindLookup, confirmAction, confirmDelete, dialogError, editView, field, fieldsTable, lookup, noteField, openDialog, relatedTable, selectField } from './dialog.js';
 import { accrualDetail } from './finance.js';
+import { financialSummary } from './financial-summary.js';
 import { recordButton } from './registry.js';
 import { badge, contractStates, contractTypes, date, escape, money, notify, today } from './ui.js';
 
 const endpoint = 'contracts';
+const expiryTerms = { '': 'Все', '0-30': 'До 30 дней', '31-90': '31–90 дней', '91-180': '91–180 дней', '181+': 'Более 180 дней' };
+
+function setupFilters(form, initial, reload) {
+  const { term, expiry_month: month, sort, state } = form.elements;
+  const chips = [...form.querySelectorAll('[data-term]')];
+  const monthChip = form.querySelector('[data-month]');
+  function show() {
+    chips.forEach(chip => chip.setAttribute('aria-pressed', String(chip.dataset.term === term.value)));
+    monthChip.hidden = !month.value;
+    if (month.value) {
+      monthChip.querySelector('span').textContent = 'Окончание · ' +
+        new Intl.DateTimeFormat('ru-RU', { month: 'long', year: 'numeric', timeZone: 'UTC' })
+          .format(new Date(`${month.value}-01T00:00:00Z`));
+    }
+  }
+  if (Object.hasOwn(expiryTerms, initial.get('term'))) term.value = initial.get('term');
+  if (/^\d{4}-(0[1-9]|1[0-2])$/.test(initial.get('expiry_month'))) month.value = initial.get('expiry_month');
+  if (term.value || month.value) {
+    state.value = 'active';
+    sort.value = 'end_asc';
+  }
+  for (const chip of chips) {
+    chip.onclick = () => {
+      term.value = chip.dataset.term;
+      month.value = '';
+      if (term.value) {
+        state.value = 'active';
+        sort.value = 'end_asc';
+      }
+      show();
+      reload();
+    };
+  }
+  monthChip.querySelector('button').onclick = () => {
+    month.value = '';
+    show();
+    reload();
+  };
+  state.addEventListener('change', () => {
+    if (state.value !== 'active') {
+      term.value = '';
+      month.value = '';
+      show();
+    }
+  });
+  show();
+}
 
 function term(record) {
   if (record.state !== 'active') return ['—', ''];
   if (record.days_remaining == null) return ['Без даты', ''];
   if (record.days_remaining === 0) return ['Истекает сегодня', 'attention'];
   return [`${record.days_remaining} дн.`, record.days_remaining <= 30 ? 'attention' : ''];
-}
-
-function addCounterparty(form, choose, view) {
-  const toggle = form.querySelector('[data-new-party]');
-  const editor = form.querySelector('.inline-editor');
-  const fields = form.querySelectorAll('[data-party-field]');
-  const save = editor.querySelector('[data-save-party]');
-  const errorLabel = editor.querySelector('.form-error');
-  function setOpen(open) {
-    editor.hidden = !open;
-    toggle.setAttribute('aria-expanded', String(open));
-    toggle.textContent = open ? 'Свернуть форму контрагента' : 'Создать контрагента';
-    if (open) fields[0].focus();
-  }
-  toggle.addEventListener('click', () => setOpen(editor.hidden));
-  save.addEventListener('click', async () => {
-    if (view.busy()) return;
-    const data = Object.fromEntries([...fields].map((input) => [input.dataset.partyField, input.value.trim() || null]));
-    errorLabel.hidden = true;
-    save.disabled = true;
-    view.setBusy(true);
-    try {
-      if (!data.name) throw new Error('Введите наименование контрагента.');
-      const party = await api('counterparties', { method: 'POST', data });
-      choose(party);
-      notify('Контрагент создан и выбран.');
-      fields.forEach((input) => { input.value = ''; });
-      setOpen(false);
-    } catch (error) {
-      errorLabel.textContent = error.message;
-      errorLabel.hidden = false;
-    } finally {
-      save.disabled = false;
-      view.setBusy(false);
-      (editor.hidden ? form.querySelector('[data-lookup=counterparty_id] [role=combobox]') : save).focus({ preventScroll: true });
-    }
-  });
 }
 
 function nextDay(isoDate) {
@@ -68,17 +79,6 @@ function edit(record, reload, source = null) {
     ${selectField('type', 'Тип договора', contractTypes, initial?.type)}
     ${lookup('property_id', 'Объект', 'Название, адрес или кадастровый номер')}
     ${lookup('counterparty_id', 'Контрагент', 'Название или ИНН')}
-    <div class="full-width"><button type="button" class="button small" data-new-party aria-expanded="false" aria-controls="party-editor">Создать контрагента</button>
-      <fieldset class="inline-editor" id="party-editor" hidden><legend>Новый контрагент</legend>
-        <div class="form-grid">
-          <label><span>Наименование</span><input data-party-field="name" maxlength="200"></label>
-          <label><span>ИНН</span><input data-party-field="tax_id" maxlength="20"></label>
-          <label class="full-width"><span>Контакт</span><input data-party-field="contact" maxlength="250"></label>
-        </div>
-        <p class="form-error" role="alert" hidden></p>
-        <div class="form-actions"><button type="button" class="button small" data-save-party>Сохранить контрагента</button></div>
-      </fieldset>
-    </div>
     ${field('start_date', 'Дата начала', record?.start_date ?? day, `type="date" required${earliestStart ? ` min="${earliestStart}"` : ''}${active ? ` max="${day}"` : ''}`)}
     ${field('end_date', 'Дата окончания', record?.end_date, 'type="date"')}
     ${field('amount', 'Сумма по договору, ₽', initial?.amount, 'type="number" min="0.01" step="0.01"')}
@@ -99,9 +99,8 @@ function edit(record, reload, source = null) {
   const refreshProperties = bindLookup(form, 'property_id', 'properties',
     (item) => [item.name, item.address, item.status === 'archived' ? 'архив' : ''].filter(Boolean).join(' · '),
     linkedProperty, () => ({ exclude_archived: true, contract_type: form.elements.type.value }));
-  const choose = bindLookup(form, 'counterparty_id', 'counterparties', (item) => item.tax_id ? `${item.name} · ИНН ${item.tax_id}` : item.name,
+  bindLookup(form, 'counterparty_id', 'counterparties', (item) => item.tax_id ? `${item.name} · ИНН ${item.tax_id}` : item.name,
     initial && { id: initial.counterparty_id, name: initial.counterparty_name });
-  addCounterparty(form, choose, view);
   function updateEndDate() {
     const start = form.elements.start_date.value;
     form.elements.end_date.required = form.elements.type.value !== 'sale' || (active && Boolean(record.end_date));
@@ -165,6 +164,7 @@ export async function contractDetail(id, reload, view = openDialog('Карточ
         ...(active ? [['Осталось', term(record)[0]]] : []), ['Сумма', record.amount == null ? '—' : money(record.amount)],
         ['Примечание', record.note, true],
       ])}
+      ${financialSummary(record.finance)}
       <section class="related"><h3>Начисления по договору</h3><div data-accruals></div></section>
       <div class="detail-actions"><button type="button" class="button danger" data-delete>Удалить</button>
         ${canEdit || expired ? `<button type="button" class="button" data-edit>${expired ? 'Изменить примечание' : 'Редактировать'}</button>` : ''}
@@ -201,12 +201,19 @@ export const contracts = {
   title: 'Реестр договоров', subtitle: 'Договоры, контрагенты и сроки окончания',
   addLabel: 'Добавить договор', searchHint: 'Номер, объект или контрагент', endpoint,
   filters: [['type', 'Тип договора', contractTypes, 'Все типы'], ['state', 'Статус договора', contractStates, 'Все статусы']],
-  columns: ['Договор', 'Контрагент', 'Окончание', 'Осталось', 'Сумма', 'Статус договора'],
+  columns: ['Договор', 'Контрагент', 'Начало', 'Окончание', 'Осталось', 'Сумма', 'Статус договора'],
+  sortable: { 'Начало': 'start', 'Окончание': 'end' },
+  filterControls: `<div class="quick-filters" role="group" aria-label="Срок окончания">
+    <input type="hidden" name="term"><input type="hidden" name="expiry_month"><input type="hidden" name="sort">
+    ${Object.entries(expiryTerms).map(([term, label]) => `<button type="button" class="button small" data-term="${term}">${label}</button>`).join('')}
+    <div class="month-filter" data-month hidden><span></span><button type="button" class="button small" aria-label="Сбросить месяц">×</button></div>
+  </div>`,
+  setupFilters,
   renderRow(item) {
     const tone = { active: 'positive', pending: 'attention', expired: 'negative', terminated: 'negative' }[item.state] ?? '';
     return `<tr><td>${recordButton(item, item.number)}
       <span class="secondary">${escape(contractTypes[item.type])} · ${escape(item.property_name)}</span></td>
-      <td>${escape(item.counterparty_name)}</td><td class="number">${date(item.end_date)}</td>
+      <td>${escape(item.counterparty_name)}</td><td class="number">${date(item.start_date)}</td><td class="number">${date(item.end_date)}</td>
       <td>${badge(...term(item))}</td><td class="number">${item.amount == null ? '—' : money(item.amount)}</td>
       <td>${badge(contractStates[item.state], tone)}</td></tr>`;
   },
