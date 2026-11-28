@@ -7,6 +7,7 @@ from pydantic import AfterValidator, BaseModel, BeforeValidator, ConfigDict, Fie
 
 from .models import ContractStatus, ContractType, PropertyStatus, PropertyType
 from .services.counterparty import clean_email, normalize_tax_id, valid_tax_checksum, valid_tax_id
+from .services.limits import AREA_MAX_MESSAGE, MAX_AREA
 from .services.registry import ContractState
 from .services.requisites import normalize_cadastral, valid_cadastral
 
@@ -20,6 +21,13 @@ def decimal_input(value):
 def check_scale(value):
     if value.as_tuple().exponent < -2:
         raise ValueError("Укажите не более двух знаков после десятичного разделителя.")
+    return value
+
+
+def check_area(value):
+    check_scale(value)
+    if value > MAX_AREA:
+        raise ValueError(AREA_MAX_MESSAGE)
     return value
 
 
@@ -40,6 +48,8 @@ PositiveAmount = Annotated[
     Decimal, Field(gt=0, max_digits=14, decimal_places=2, allow_inf_nan=False),
     BeforeValidator(decimal_input), AfterValidator(check_scale),
 ]
+# Any value up to MAX_AREA with two decimals already fits NUMERIC(14, 2).
+PositiveArea = Annotated[Decimal, Field(gt=0, allow_inf_nan=False), BeforeValidator(decimal_input), AfterValidator(check_area)]
 CalendarDate = Annotated[date, BeforeValidator(calendar_input)]
 Id = Annotated[int, Field(gt=0, le=2_147_483_647)]
 Period = Literal["last12", "year", "all"]
@@ -54,7 +64,7 @@ class PropertyPatch(Schema):
     name: Name | None = None
     type: PropertyType | None = None
     address: Annotated[str, StringConstraints(min_length=1, max_length=300)] | None = None
-    area: PositiveAmount | None = None
+    area: PositiveArea | None = None
     cadastral_number: Annotated[str | None, BeforeValidator(normalize_cadastral), AfterValidator(check_cadastral)] = None
     status: PropertyStatus | None = None
     note: Annotated[str, StringConstraints(max_length=3000)] | None = None

@@ -32,7 +32,7 @@ export function pagedTable(container, { endpoint, params, columns, renderRow, em
   const bottom = container.querySelector('[data-bottom]');
   const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
   let controller;
-  let page = 1;
+  let page = initial?.page ?? 1;
   let focusAfter;
 
   function feedback(message, error = false) {
@@ -61,6 +61,7 @@ export function pagedTable(container, { endpoint, params, columns, renderRow, em
   }
 
   function draw(result, animate = true) {
+    if (nested) container.dataset.currentPage = result.page;
     const populated = result.total > 0;
     const previous = document.activeElement?.closest('[data-record]');
     const restoreRecord = body.contains(previous) ? previous.dataset.record : null;
@@ -144,8 +145,11 @@ export function pagedTable(container, { endpoint, params, columns, renderRow, em
 
 const relatedPageSize = 8;
 
-export function relatedPage(endpoint, params, signal) {
-  return api(endpoint, { params: { ...params, page: 1, page_size: relatedPageSize }, signal });
+export async function relatedPage(endpoint, params, signal, page = 1) {
+  const fetchPage = page => api(endpoint, { params: { ...params, page, page_size: relatedPageSize }, signal });
+  const result = await fetchPage(page);
+  const last = Math.max(1, Math.ceil(result.total / result.page_size));
+  return page > last ? fetchPage(last) : result;
 }
 
 export function relatedTable(container, config) {

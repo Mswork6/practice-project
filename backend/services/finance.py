@@ -9,6 +9,7 @@ from ..database import commit
 from ..models import Accrual, Contract, Payment
 from ..schemas import FinancialTotals, PaymentIn
 from ..validation import FieldError
+from .limits import DATE_FLOOR, check_date
 
 ZERO = Decimal("0.00")
 
@@ -55,10 +56,9 @@ def lock_unpaid_accrual(db: Session, id: int):
 
 
 def validate_payment(db: Session, accrual: Accrual, amount: Decimal, payment_date: date, today: date, *, excluding=None):
-    if payment_date > today:
-        raise FieldError(422, "Дата платежа не может быть позже сегодняшней даты.", "payment_date")
-    if payment_date < accrual.accrual_date:
+    if accrual.accrual_date > DATE_FLOOR and payment_date < accrual.accrual_date:
         raise FieldError(422, "Дата платежа не может предшествовать дате начисления.", "payment_date")
+    check_date(payment_date, "Дата платежа", today, field="payment_date")
     query = select(func.sum(Payment.amount)).where(Payment.accrual_id == accrual.id)
     if excluding is not None:
         query = query.where(Payment.id != excluding)

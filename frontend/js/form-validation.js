@@ -49,14 +49,16 @@ function cents(value) {
   return BigInt(whole || '0') * 100n + BigInt(fraction.padEnd(2, '0'));
 }
 
-function decimalError(value, limit) {
+function decimalError(value, control) {
   if (!/^\+?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)$/.test(value) || !/[1-9]/.test(value)) {
     return 'Введите положительное число.';
   }
   const [whole, fraction = ''] = value.replace(/^\+/, '').split('.');
   if (fraction.length > 2) return 'Укажите не более двух знаков после десятичного разделителя.';
+  const hundredths = cents(value.replace(/^\+/, ''));
+  if (control.dataset.max && hundredths > cents(control.dataset.max)) return control.dataset.maxMessage;
   if (whole.replace(/^0+/, '').length > 12) return 'Допустимо не более 12 цифр до десятичного разделителя.';
-  if (limit != null && cents(value.replace(/^\+/, '')) > cents(limit)) {
+  if (control.dataset.limit && hundredths > cents(control.dataset.limit)) {
     return 'Сумма превышает доступный остаток начисления.';
   }
 }
@@ -71,7 +73,7 @@ function check(control, name, value) {
   if (control.maxLength >= 0 && [...value].length > control.maxLength) {
     return `Допустимо не более ${control.maxLength} символов.`;
   }
-  if (control.hasAttribute('data-decimal')) return decimalError(value, control.dataset.limit);
+  if (control.hasAttribute('data-decimal')) return decimalError(value, control);
   if (name === 'tax_id') return taxError(value);
   if (name === 'email') return emailError(value);
   if (name === 'cadastral_number' && !cadastralPattern.test(value)) {
@@ -79,8 +81,9 @@ function check(control, name, value) {
   }
   if (control.type === 'date') {
     if (!/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(value)) return 'Укажите корректную календарную дату.';
-    if (control.validity.rangeUnderflow) return control.dataset.minMessage ?? 'Укажите более позднюю дату.';
-    if (control.validity.rangeOverflow) return control.dataset.maxMessage ?? 'Укажите более раннюю дату.';
+    // Limits are compared explicitly; min and max only guide the date picker.
+    if (control.min && value < control.min) return control.dataset.minMessage ?? 'Укажите более позднюю дату.';
+    if (control.max && value > control.max) return control.dataset.maxMessage ?? 'Укажите более раннюю дату.';
   }
   if (control instanceof HTMLSelectElement && ![...control.options].some(option => option.value === value)) {
     return 'Выберите значение из списка.';

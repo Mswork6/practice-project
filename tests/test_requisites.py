@@ -86,11 +86,12 @@ def test_property_form_field_errors(client, field, value):
 
 
 def test_property_accepts_text_punctuation_multiline_and_comma_decimal(client):
+    # The area is capped at 1 000 000 000 m², while money keeps the full NUMERIC(14, 2) range.
     record = create(client, "properties", {"name": " «A» (№ 3-A) ", "address": " квартал 11, 3-й км / уч. № 2 ",
-                                           "type": "land", "area": "999999999999,99", "note": " Первая\nВторая "})
+                                           "type": "land", "area": "999999999,99", "note": " Первая\nВторая "})
     assert record["name"] == "«A» (№ 3-A)"
     assert record["address"] == "квартал 11, 3-й км / уч. № 2"
-    assert record["area"] == "999999999999.99"
+    assert record["area"] == "999999999.99"
     assert record["note"] == "Первая\nВторая"
 
 

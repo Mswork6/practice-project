@@ -6,6 +6,7 @@ from sqlalchemy import CheckConstraint, Date, Enum, ForeignKey, Index, Numeric, 
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from .config import local_today
+from .services.limits import AREA_CHECK, AREA_CHECK_SQL
 from .services.requisites import CADASTRAL_CHECK_SQL, CADASTRAL_KEY_INDEX, CADASTRAL_KEY_SQL
 
 
@@ -53,6 +54,7 @@ class Property(Base):
     __tablename__ = "properties"
     __table_args__ = (
         CheckConstraint("area > 0", name="positive_property_area"),
+        CheckConstraint(AREA_CHECK_SQL, name=AREA_CHECK),
         UniqueConstraint("cadastral_number", name="unique_property_cadastral_number"),
         CheckConstraint(CADASTRAL_CHECK_SQL, name="valid_property_cadastral_number"),
         Index(CADASTRAL_KEY_INDEX, text(CADASTRAL_KEY_SQL), unique=True),

@@ -33,9 +33,10 @@ function detail(id, reload) {
       ${financialSummary(record.finance, true)}
       <section class="related"><h3>Договоры контрагента</h3><div data-contracts></div></section>
       <div class="detail-actions">
-        <button type="button" class="button danger" data-delete>Удалить</button>
+        <button type="button" class="button danger" data-delete${record.contract_count ? ' disabled' : ''}>Удалить</button>
         <button type="button" class="button primary" data-edit>Редактировать</button>
-      </div>`);
+      </div>
+      ${record.contract_count ? '<p class="subheading">Удаление недоступно: у контрагента есть связанные договоры.</p>' : ''}`);
     relatedTable(view.content.querySelector('[data-contracts]'), {
       ...related, initial, columns: ['Номер', 'Начало', 'Окончание', 'Статус договора'],
       renderRow: c => `<tr><td>${recordButton(c, c.number)}</td><td class="number">${date(c.start_date)}</td>

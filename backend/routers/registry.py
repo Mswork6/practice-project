@@ -12,6 +12,7 @@ from ..schemas import Page, PropertyIn, PropertyOut, PropertyPatch
 from ..schemas import CounterpartyDetail, CounterpartyFields, CounterpartyPatch
 from ..services.counterparty import normalize_tax_id
 from ..services.finance import financial_totals
+from ..services.limits import add_years, check_contract_dates, check_date
 from ..services.requisites import CADASTRAL_KEY_INDEX
 from ..validation import FieldError
 from ..services.registry import (
@@ -322,6 +323,7 @@ def locked_contract(db, id, today):
 @router.post("/contracts", response_model=ContractOut, status_code=201)
 def create_contract(data: ContractIn, db: Db):
     today = local_today()
+    check_contract_dates(data.start_date, data.end_date, today)
     record = Contract(status=ContractStatus.ACTIVE)
     prepare_contract(db, record, data.model_dump(), today)
     return persist_contract(db, record, today)
@@ -342,10 +344,19 @@ def update_contract(id: Id, data: ContractPatch, db: Db):
     else:
         if state == ContractState.ACTIVE:
             end = values["end_date"]
-            if record.end_date is not None and (end is None or end > record.end_date):
-                raise FieldError(409, "Увеличить срок действующей аренды можно через действие «Продлить».", "end_date")
+            if record.type in RENTAL_OBJECT_TYPES and values["type"] not in RENTAL_OBJECT_TYPES:
+                raise FieldError(409, "Тип действующей аренды нельзя изменить на продажу или прочий договор.", "type")
+            if record.end_date is not None:
+                if end is None:
+                    raise FieldError(409, "Укажите дату окончания договора.", "end_date")
+                rental = record.type in RENTAL_OBJECT_TYPES or values["type"] in RENTAL_OBJECT_TYPES
+                if rental and record.end_date <= add_years(today, 100) and end > record.end_date:
+                    raise FieldError(409, "Увеличить срок действующей аренды можно через действие «Продлить».", "end_date")
+        check_contract_dates(values["start_date"], values["end_date"], today)
+        if state == ContractState.ACTIVE:
             if proposed_contract_state(db, record.status, values, today) != ContractState.ACTIVE:
-                raise HTTPException(409, "Изменённые даты должны оставлять договор действующим на сегодня.")
+                field = "start_date" if values["start_date"] > today else "end_date"
+                raise FieldError(409, "Изменённые даты должны оставлять договор действующим на сегодня.", field)
         prepare_contract(db, record, values, today)
     return persist_contract(db, record, today)
 
@@ -378,6 +389,7 @@ def extend_contract(id: Id, data: ContractExtension, db: Db):
         raise HTTPException(409, "Продлить можно только действующий договор аренды с датой окончания.")
     if data.end_date <= record.end_date:
         raise FieldError(422, "Новая дата окончания должна быть позже текущей даты окончания договора.", "end_date")
+    check_date(data.end_date, "Дата окончания договора", add_years(today, 100), field="end_date")
     values = ContractIn.model_validate(record).model_dump()
     validate_contract_assignment(db, record, {**values, "end_date": data.end_date}, today)
     record.end_date = data.end_date
@@ -390,6 +402,7 @@ def create_successor(id: Id, data: ContractIn, db: Db):
     source, state = locked_contract(db, id, today)
     if state in OPEN_STATES:
         raise HTTPException(409, "Создать новый договор на основе можно после истечения срока, завершения или расторжения.")
+    check_contract_dates(data.start_date, data.end_date, today)
     if state == ContractState.EXPIRED and data.start_date <= source.end_date:
         raise FieldError(422, "Новый договор должен начинаться после даты окончания предыдущего.", "start_date")
 

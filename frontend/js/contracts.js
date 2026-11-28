@@ -1,12 +1,14 @@
 import { api, FormError } from './api.js';
 import { updateRequiredMark } from './form-validation.js';
+import { DATE_FLOOR, dateLimits, notEarlier, notLater } from './date-limits.js';
 import { bindForm, bindLookup, confirmAction, confirmDelete, editView, field, fieldsTable, lookup, noteField, loadDetail, relatedTable, selectField } from './dialog.js';
 import { accrualDetail } from './finance.js';
 import { financialSummary } from './financial-summary.js';
 import { recordButton } from './registry.js';
-import { badge, contractStates, contractTypes, date, escape, money, notify, today } from './ui.js';
+import { badge, contractStates, contractTypes, date, escape, money, notify } from './ui.js';
 
 const endpoint = 'contracts';
+const rentalTypes = ['real_estate_rent', 'land_rent'];
 const expiryTerms = { '': 'Все', '0-30': 'До 30 дней', '31-90': '31–90 дней', '91-180': '91–180 дней', '181+': 'Более 180 дней' };
 
 function setupFilters(form, initial, reload) {
@@ -68,9 +70,11 @@ function nextDay(isoDate) {
 
 function edit(record, reload, source = null) {
   const initial = record ?? source;
-  const day = today();
+  const { day, soon, distant } = dateLimits();
   const active = record?.state === 'active';
+  const activeRental = active && rentalTypes.includes(record.type);
   const earliestStart = source?.state === 'expired' ? nextDay(source.end_date) : '';
+  const startMin = earliestStart > DATE_FLOOR ? earliestStart : DATE_FLOOR;
   const heading = record ? 'Редактирование договора' : source ? 'Новый договор на основе предыдущего' : 'Новый договор';
   const view = editView(heading, `
     ${source ? `<p class="full-width subheading">На основе договора № ${escape(source.number)}. Укажите новый номер и период действия.</p>` : ''}
@@ -78,7 +82,9 @@ function edit(record, reload, source = null) {
     ${selectField('type', 'Тип договора', contractTypes, initial?.type)}
     ${lookup('property_id', 'Объект', 'Название, адрес или кадастровый номер')}
     ${lookup('counterparty_id', 'Контрагент', 'Название или ИНН')}
-    ${field('start_date', 'Дата начала', record?.start_date ?? day, `type="date" required${earliestStart ? ` min="${earliestStart}"` : ''}${active ? ` max="${day}"` : ''}`)}
+    ${field('start_date', 'Дата начала', record?.start_date ?? day, `type="date" required min="${startMin}" max="${active ? day : soon}"
+      data-min-message="${startMin > DATE_FLOOR ? 'Новый договор должен начинаться после даты окончания предыдущего.' : notEarlier('Дата начала договора')}"
+      data-max-message="${active ? 'Изменённые даты должны оставлять договор действующим на сегодня.' : notLater('Дата начала договора', soon)}"`)}
     ${field('end_date', 'Дата окончания', record?.end_date, 'type="date"')}
     ${field('amount', 'Сумма по договору, ₽', initial?.amount, 'inputmode="decimal" data-decimal')}
     ${noteField('note', 'Примечание', source ? `На основе договора № ${source.number}.` : record?.note)}`);
@@ -102,15 +108,23 @@ function edit(record, reload, source = null) {
     linkedProperty, () => ({ exclude_archived: true, contract_type: form.elements.type.value }));
   bindLookup(form, 'counterparty_id', 'counterparties', (item) => item.tax_id ? `${item.name} · ИНН ${item.tax_id}` : item.name,
     initial && { id: initial.counterparty_id, name: initial.counterparty_name });
+  const { type, start_date: start, end_date: end } = form.elements;
+  if (activeRental) {
+    for (const option of type.options) option.disabled = !rentalTypes.includes(option.value);
+  }
   function updateEndDate() {
-    const start = form.elements.start_date.value;
-    form.elements.end_date.required = form.elements.type.value !== 'sale' || (active && Boolean(record.end_date));
-    form.elements.end_date.min = active && start < day ? day : start;
-    form.elements.end_date.max = active ? record.end_date ?? '' : '';
-    form.elements.end_date.dataset.minMessage = active && start < day ?
-      'Изменённые даты должны оставлять договор действующим на сегодня.' : 'Дата окончания не может быть раньше даты начала.';
-    form.elements.end_date.dataset.maxMessage = 'Увеличить срок действующей аренды можно через действие «Продлить».';
-    updateRequiredMark(form.elements.end_date);
+    const limited = active && (activeRental || rentalTypes.includes(type.value));
+    const cap = limited ? record.end_date : '';
+    const follows = start.value > DATE_FLOOR;
+    const activeFloor = active && start.value <= day;
+    end.required = type.value !== 'sale' || (active && Boolean(record.end_date));
+    end.min = activeFloor ? day : follows ? start.value : DATE_FLOOR;
+    end.max = cap && cap <= distant ? cap : distant;
+    end.dataset.minMessage = activeFloor ? 'Изменённые даты должны оставлять договор действующим на сегодня.' :
+      follows ? 'Дата окончания не может быть раньше даты начала.' : notEarlier('Дата окончания договора');
+    end.dataset.maxMessage = cap && cap <= distant ?
+      'Увеличить срок действующей аренды можно через действие «Продлить».' : notLater('Дата окончания договора', distant);
+    updateRequiredMark(end);
   }
   updateEndDate();
   form.elements.type.addEventListener('change', () => {
@@ -130,9 +144,11 @@ function editNote(record, reload) {
 }
 
 function extend(record, reload) {
+  const { distant } = dateLimits();
   const view = editView('Продление договора', `
     <div class="full-width">${fieldsTable([['Номер договора', record.number], ['Текущая дата окончания', date(record.end_date)]])}</div>
-    ${field('end_date', 'Новая дата окончания', '', `type="date" min="${nextDay(record.end_date)}" required autofocus`, true)}`, 'Продлить');
+    ${field('end_date', 'Новая дата окончания', '', `type="date" min="${nextDay(record.end_date)}" max="${distant}" required autofocus
+      data-min-message="Новая дата окончания должна быть позже текущей даты окончания договора." data-max-message="${notLater('Дата окончания договора', distant)}"`, true)}`, 'Продлить');
   bindForm(view, async (values) => {
     await api(`${endpoint}/${record.id}/extend`, { method: 'POST', data: { end_date: values.get('end_date') } });
     notify('Договор продлён.');
@@ -157,8 +173,7 @@ export function contractDetail(id, reload) {
     const active = record.state === 'active';
     const expired = record.state === 'expired';
     const canEdit = active || record.state === 'pending';
-    const canExtend = active && !record.property_archived && record.end_date &&
-      ['real_estate_rent', 'land_rent'].includes(record.type);
+    const canExtend = active && !record.property_archived && record.end_date && rentalTypes.includes(record.type);
     const html = `
       ${fieldsTable([
         ['ID', record.id], ['Тип', contractTypes[record.type]],
@@ -170,13 +185,14 @@ export function contractDetail(id, reload) {
       ])}
       ${financialSummary(record.finance)}
       <section class="related"><h3>Начисления по договору</h3><div data-accruals></div></section>
-      <div class="detail-actions"><button type="button" class="button danger" data-delete>Удалить</button>
+      <div class="detail-actions"><button type="button" class="button danger" data-delete${initial.total ? ' disabled' : ''}>Удалить</button>
         ${canEdit || expired ? `<button type="button" class="button" data-edit>${expired ? 'Изменить примечание' : 'Редактировать'}</button>` : ''}
         ${active || expired ? '<button type="button" class="button" data-complete>Завершить</button>' : ''}
         ${active ? '<button type="button" class="button danger" data-terminate>Расторгнуть</button>' : ''}
         ${canExtend ? '<button type="button" class="button primary" data-extend>Продлить</button>' : ''}
         ${!canEdit ? '<button type="button" class="button primary" data-successor>Создать новый договор на основе</button>' : ''}
-      </div>`;
+      </div>
+      ${initial.total ? '<p class="subheading">Удаление недоступно: по договору есть начисления.</p>' : ''}`;
     const view = show(`Договор № ${record.number}`, html);
     relatedTable(view.content.querySelector('[data-accruals]'), {
       ...related, initial, columns: ['Начисление', 'Сумма', 'Остаток'],

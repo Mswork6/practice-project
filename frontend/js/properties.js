@@ -13,8 +13,8 @@ function edit(record, reload) {
     ${selectField('type', 'Категория', propertyTypes, record?.type)}
     ${record ? `<p class="lookup-hint">Статус – ${propertyStatuses[record.status]}.</p>` : ''}
     ${field('address', 'Адрес', record?.address, 'required maxlength="300"', true)}
-    ${field('area', 'Площадь, м²', record?.area, 'inputmode="decimal" data-decimal')}
-    ${field('cadastral_number', 'Кадастровый номер', record?.cadastral_number, 'maxlength="80" placeholder="00:00:0000000:000"')}
+    ${field('area', 'Площадь, м²', record?.area, 'inputmode="decimal" data-decimal data-max="1000000000" data-max-message="Площадь объекта не может превышать 1 000 000 000 м²."')}
+    ${field('cadastral_number', 'Кадастровый номер', record?.cadastral_number, 'maxlength="80" placeholder="74:36:0000001:1"')}
     ${noteField('note', 'Примечание', record?.note)}`);
   bindForm(view, async (values) => {
     const data = Object.fromEntries([...values].map(([key, value]) => [key, value.trim() || null]));
@@ -38,9 +38,10 @@ function detail(id, reload) {
       <div class="detail-actions">
         ${record.status === 'archived' ? '<button type="button" class="button" data-archive>Восстановить</button>' :
           `<button type="button" class="button" data-archive${record.can_archive ? '' : ' disabled'}>Архивировать</button>`}
-        <button type="button" class="button danger" data-delete>Удалить</button>
+        <button type="button" class="button danger" data-delete${initial.total ? ' disabled' : ''}>Удалить</button>
         <button type="button" class="button primary" data-edit>Редактировать</button>
       </div>
+      ${initial.total ? '<p class="subheading">Удаление недоступно: у объекта есть связанные договоры.</p>' : ''}
       ${record.status !== 'archived' && !record.can_archive ?
         '<p class="form-error">Архивирование доступно после окончания действующих и ожидающих начала договоров.</p>' : ''}`;
     const view = show(record.name, html);

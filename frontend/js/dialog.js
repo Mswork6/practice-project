@@ -30,11 +30,25 @@ function cancelDetail(abort = true) {
   pending = null;
 }
 
+function detailError(message, retry) {
+  feedback.textContent = message;
+  if (retry) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'button small';
+    button.textContent = 'Повторить';
+    button.addEventListener('click', retry);
+    feedback.append(button);
+  }
+  feedback.hidden = false;
+}
+
 export async function loadDetail(path, related, render, view) {
   const parent = top();
-  if (view && !view.current()) return;
+  if (view && !view.active()) return;
   if (pending?.path === path && pending.parent === parent && pending.view === view) return;
   cancelDetail();
+  const changes = view?.changes;
   const controller = new AbortController();
   const { signal } = controller;
   const opener = document.activeElement;
@@ -49,36 +63,46 @@ export async function loadDetail(path, related, render, view) {
   if (opener instanceof HTMLElement) opener.setAttribute('aria-busy', 'true');
   const hash = location.hash;
   try {
+    const relatedPageNumber = Number(view?.content.querySelector('[data-current-page]')?.dataset.currentPage ?? 1);
     const [record, page] = await Promise.all([
       api(path, { signal }),
-      related ? relatedPage(related.endpoint, related.params, signal) : null,
+      related ? relatedPage(related.endpoint, related.params, signal, relatedPageNumber) : null,
     ]);
     const liveOpener = opener?.isConnected ? opener :
       sourceTable?.querySelector(`[data-record="${CSS.escape(opener.dataset.record)}"]`);
-    if (signal.aborted || hash !== location.hash || top() !== parent || !liveOpener?.isConnected) return;
+    if (signal.aborted || hash !== location.hash || top() !== parent || (!view && !liveOpener?.isConnected)) return;
     cancelDetail(false);
+    if (view && view.changes !== changes) {
+      view.refresh();
+      return;
+    }
     const scrollTop = host.scrollTop;
-    const focusKey = view?.content.contains(opener) && opener.getAttributeNames().find(name => name.startsWith('data-'));
+    const focused = document.activeElement;
+    const focusKey = view?.content.contains(focused) && focused.getAttributeNames().find(name => name.startsWith('data-'));
     render(record, page, (heading, html) => {
       const card = view ?? openDialog(heading, html, liveOpener);
       if (view) view.set(heading, html);
-      card.refresh(() => loadDetail(path, related, render, card));
+      card.onRefresh(() => loadDetail(path, related, render, card));
       return card;
     });
     if (view) {
       if (focusKey) {
-        [...view.content.querySelectorAll(`[${CSS.escape(focusKey)}]`)]
-          .find(element => element.getAttribute(focusKey) === opener.getAttribute(focusKey))
-          ?.focus({ preventScroll: true });
+        const replacement = [...view.content.querySelectorAll(`[${CSS.escape(focusKey)}]`)]
+          .find(element => element.getAttribute(focusKey) === focused.getAttribute(focusKey) && !element.disabled);
+        replacement?.focus({ preventScroll: true });
       }
       host.scrollTop = scrollTop;
+      view.markRefreshed();
     }
   } catch (error) {
     if (signal.aborted || hash !== location.hash || top() !== parent) return;
     cancelDetail();
     if (parent) {
-      feedback.textContent = error.message;
-      feedback.hidden = false;
+      const retry = view ? () => view.refresh() : parent.stale ? parent.refresh : null;
+      detailError(error.message, retry && (() => {
+        (opener?.isConnected ? opener : closeButton).focus({ preventScroll: true });
+        retry();
+      }));
     } else {
       notify(error.message);
     }
@@ -136,7 +160,7 @@ function pop(count = 1, changed = false) {
     removed = frames.pop();
     if (removed !== outgoing) removed.content.remove();
   }
-  if (changed) frames.forEach((frame) => { frame.stale = true; });
+  if (changed) frames.forEach((frame) => { frame.stale = true; frame.changes += 1; });
 
   const parent = top();
   if (!parent) {
@@ -156,10 +180,8 @@ function pop(count = 1, changed = false) {
   outgoing.content.remove();
   activate(parent, removed.opener, parent.scrollTop);
   reveal(parent.content, { offset: 0 });
-  if (parent.stale && parent.refresh) {
-    parent.stale = false;
-    parent.refresh();
-  }
+  // The card clears its own mark only after fresh data has been applied.
+  if (parent.stale && parent.refresh) parent.refresh();
 }
 
 function dismiss() {
@@ -195,7 +217,7 @@ export function openDialog(heading, html, opener = document.activeElement) {
   retiring?.remove();
   retiring = null;
   const parent = top();
-  const frame = { heading, opener, content: document.createElement('div'), busy: false };
+  const frame = { heading, opener, content: document.createElement('div'), busy: false, stale: false, changes: 0 };
   frame.content.innerHTML = html;
   if (parent) {
     parent.scrollTop = host.scrollTop;
@@ -209,6 +231,7 @@ export function openDialog(heading, html, opener = document.activeElement) {
   return {
     content: frame.content,
     current: () => frames.includes(frame),
+    active: () => top() === frame,
     set(newHeading, newHtml) {
       if (!frames.includes(frame)) return false;
       frame.heading = newHeading;
@@ -218,11 +241,13 @@ export function openDialog(heading, html, opener = document.activeElement) {
       if (active) {
         title.textContent = newHeading;
         if (restore) closeButton.focus({ preventScroll: true });
-        reveal(frame.content, { offset: 0 });
       }
       return true;
     },
-    refresh(callback) { frame.refresh = callback; },
+    onRefresh(callback) { frame.refresh = callback; },
+    refresh() { if (top() === frame) frame.refresh?.(); },
+    get changes() { return frame.changes; },
+    markRefreshed() { frame.stale = false; },
     guard(dirty) { frame.dirty = dirty; },
     setBusy(busy) {
       frame.busy = busy;

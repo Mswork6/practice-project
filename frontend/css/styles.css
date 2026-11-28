@@ -285,6 +285,8 @@ dialog[open]::backdrop { background: #090a0dc4; }
 .notice { position: fixed; bottom: 18px; right: 18px; max-width: calc(100vw - 36px); background: #243730; border: 1px solid #4b7865; color: #c5efd8; border-radius: 9px; padding: 12px 16px; box-shadow: 0 10px 35px #0006; z-index: 2; }
 .detail-feedback { background: var(--raised); border-color: var(--line); color: var(--soft); }
 dialog .detail-feedback { position: absolute; max-width: calc(100% - 36px); pointer-events: none; }
+dialog .detail-feedback:has(button) { display: flex; align-items: center; gap: 10px; }
+dialog .detail-feedback button { pointer-events: auto; }
 @media (max-width: 1100px) {
   .topbar-inner, .shell { width: calc(100% - 56px); }
   .clock { display: none; }

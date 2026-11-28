@@ -1,16 +1,19 @@
 import { api } from './api.js';
 import { bindForm, bindLookup, confirmDelete, editView, field, fieldsTable, lookup, noteField, loadDetail, relatedTable } from './dialog.js';
 import { recordButton } from './registry.js';
+import { DATE_FLOOR, dateLimits, notEarlier, notLater } from './date-limits.js';
 import { badge, date, escape, money, notify, today } from './ui.js';
 
 const endpoint = 'accruals';
 
 function edit(record, reload) {
+  const { day, soon, distant } = dateLimits();
   const view = editView(record ? 'Редактирование начисления' : 'Новое начисление', `
     ${lookup('contract_id', 'Договор', 'Номер, объект или контрагент')}
     ${field('amount', 'Сумма начисления, ₽', record?.amount, 'inputmode="decimal" data-decimal required')}
-    ${field('accrual_date', 'Дата начисления', record?.accrual_date ?? today(), 'type="date" required')}
-    ${field('due_date', 'Срок оплаты', record?.due_date, 'type="date" required data-min-message="Срок оплаты не может предшествовать дате начисления."')}
+    ${field('accrual_date', 'Дата начисления', record?.accrual_date ?? day, `type="date" required min="${DATE_FLOOR}" max="${soon}"
+      data-min-message="${notEarlier('Дата начисления')}" data-max-message="${notLater('Дата начисления', soon)}"`)}
+    ${field('due_date', 'Срок оплаты', record?.due_date, `type="date" required max="${distant}" data-max-message="${notLater('Срок оплаты', distant)}"`)}
     ${noteField('description', 'Описание', record?.description)}`);
   const form = bindForm(view, async (values) => {
     const data = Object.fromEntries([...values].map(([key, value]) => [key, value.trim() || null]));
@@ -21,19 +24,25 @@ function edit(record, reload) {
   bindLookup(form, 'contract_id', 'contracts', (item) => [item.number, item.property_name, item.counterparty_name].filter(Boolean).join(' · '), record && {
     id: record.contract_id, number: record.contract_number, property_name: record.property_name,
   });
-  function updateDueDate() { form.elements.due_date.min = form.elements.accrual_date.value; }
+  const { accrual_date: accrual, due_date: due } = form.elements;
+  function updateDueDate() {
+    const follows = accrual.value > DATE_FLOOR;
+    due.min = follows ? accrual.value : DATE_FLOOR;
+    due.dataset.minMessage = follows ? 'Срок оплаты не может предшествовать дате начисления.' : notEarlier('Срок оплаты');
+  }
   form.elements.accrual_date.addEventListener('input', updateDueDate);
   updateDueDate();
 }
 
 function paymentForm(record, reload, editing = false) {
-  const day = today();
+  const { day } = dateLimits();
   const accrual = editing ? record.accrual_id : record.id;
+  const after = record.accrual_date > DATE_FLOOR;
   const view = editView(editing ? 'Редактирование платежа' : 'Новый платёж', `
     <p class="full-width subheading">Максимальная сумма платежа по начислению № ${accrual} – ${money(record.payment_limit)}.</p>
     ${field('amount', 'Сумма платежа, ₽', editing ? record.amount : '', `inputmode="decimal" data-decimal data-limit="${escape(record.payment_limit)}" required autofocus`)}
-    ${field('payment_date', 'Дата платежа', editing ? record.payment_date : day, `type="date" min="${escape(record.accrual_date)}" max="${day}" required
-      data-min-message="Дата платежа не может предшествовать дате начисления." data-max-message="Дата платежа не может быть позже сегодняшней даты."`)}`);
+    ${field('payment_date', 'Дата платежа', editing ? record.payment_date : day, `type="date" min="${escape(after ? record.accrual_date : DATE_FLOOR)}" max="${day}" required
+      data-min-message="${after ? 'Дата платежа не может предшествовать дате начисления.' : notEarlier('Дата платежа')}" data-max-message="${notLater('Дата платежа', day)}"`)}`);
   bindForm(view, async (values) => {
     const data = Object.fromEntries(values);
     if (editing) await api(`payments/${record.id}`, { method: 'PATCH', data });
@@ -82,9 +91,11 @@ export function accrualDetail(id, reload) {
       ${futureAccrual ? '<p class="subheading">Платёж доступен с даты начисления.</p>' : ''}
       ${hasFuturePayments ? '<p class="subheading">Платежи с будущими датами сохранены в истории и ещё не входят в сумму оплаты на сегодня.</p>' : ''}
       <div class="detail-actions">
-        ${record.has_payments ? '' : '<button type="button" class="button danger" data-delete>Удалить</button><button type="button" class="button" data-edit>Редактировать</button>'}
+        <button type="button" class="button danger" data-delete${record.has_payments ? ' disabled' : ''}>Удалить</button>
+        ${record.has_payments ? '' : '<button type="button" class="button" data-edit>Редактировать</button>'}
         ${!futureAccrual && Number(record.payment_limit) > 0 ? '<button type="button" class="button primary" data-pay>Зарегистрировать платёж</button>' : ''}
-      </div>`;
+      </div>
+      ${record.has_payments ? '<p class="subheading">Удаление недоступно: по начислению зарегистрированы платежи.</p>' : ''}`;
     const view = show(`Начисление № ${id}`, html);
     relatedTable(view.content.querySelector('[data-related]'), {
       ...related, initial, columns: ['ID', 'Дата платежа', 'Сумма'],

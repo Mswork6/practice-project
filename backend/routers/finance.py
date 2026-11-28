@@ -8,6 +8,7 @@ from ..models import Accrual, Contract, Payment, Property
 from ..schemas import AccrualIn, AccrualOut, AccrualPatch, BalanceStatus, Id, Page
 from ..schemas import PaymentDetail, PaymentIn, PaymentOut, PaymentPatch
 from ..services.finance import ZERO, lock_payment, lock_unpaid_accrual, register_payment, validate_payment
+from ..services.limits import check_accrual_dates
 from .common import PageNumber, PageSize, Search, merge, paginate, require
 
 router = APIRouter(tags=["Финансы"])
@@ -75,6 +76,7 @@ def accrual_detail(id: Id, db: Db):
 
 @router.post("/accruals", response_model=AccrualOut, status_code=201)
 def create_accrual(data: AccrualIn, db: Db):
+    check_accrual_dates(data.accrual_date, data.due_date, local_today())
     require(db, Contract, data.contract_id, "Договор не найден.", field="contract_id")
     row = Accrual(**data.model_dump())
     db.add(row)
@@ -86,6 +88,7 @@ def create_accrual(data: AccrualIn, db: Db):
 def update_accrual(id: Id, data: AccrualPatch, db: Db):
     row = lock_unpaid_accrual(db, id)
     values = merge(AccrualIn, row, data)
+    check_accrual_dates(values["accrual_date"], values["due_date"], local_today())
     require(db, Contract, values["contract_id"], "Договор не найден.", field="contract_id")
     for key, value in values.items():
         setattr(row, key, value)
