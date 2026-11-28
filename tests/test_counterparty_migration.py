@@ -4,8 +4,8 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError
 
 from backend.migrate_counterparty import migrate, plan
 from backend.models import Contract
-from backend.seed import make_parties, tax_number
-from backend.services.counterparty import clean_email, valid_tax_id
+from backend.seed import legacy_individual_tax_number, make_parties
+from backend.services.counterparty import clean_email, valid_tax_checksum
 from backend.services.finance import financial_totals
 from conftest import AS_OF
 from test_application import create, create_agreement, make_accrual
@@ -25,7 +25,7 @@ def test_seed_counterparty_requisites():
     parties = make_parties()
     assert len({party.tax_id for party in parties}) == len(parties)
     for party in parties:
-        assert valid_tax_id(party.tax_id)
+        assert valid_tax_checksum(party.tax_id)
         assert clean_email(party.email) == party.email and party.email.endswith(".invalid")
 
 
@@ -40,7 +40,7 @@ def test_migration_preserves_contract_references_and_finance(engine, client):
         legacy(connection)
         connection.execute(text("UPDATE counterparties SET tax_id = '0012-345678', contact = ' office@example.com '"))
         connection.execute(text("INSERT INTO counterparties (name, tax_id, contact) VALUES (:name, :tax, :contact)"), [
-            {"name": demo.name, "tax": tax_number(demo_index, True, individual_width=11), "contact": demo.email},
+            {"name": demo.name, "tax": legacy_individual_tax_number(demo_index), "contact": demo.email},
             {"name": "Прочая организация", "tax": "009876543210", "contact": "+7 333 1234567"},
             {"name": "Без почты", "tax": "009876543211", "contact": " "},
         ])

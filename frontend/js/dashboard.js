@@ -25,7 +25,7 @@ export function mountDashboard(root) {
       ${Object.entries(modes).map(([key, mode]) => `
         <button type="button" class="kpi" data-mode="${key}" aria-pressed="${selected === key}" aria-controls="analytics">
           <span class="kpi-icon">${icon(mode.icon)}</span>
-          <span class="kpi-value">—</span>
+          <span class="kpi-value">–</span>
           <span class="kpi-name">${mode.name}</span>
           <span class="kpi-context"></span>
         </button>`).join('')}
@@ -98,10 +98,10 @@ export function mountDashboard(root) {
     root.querySelector('#trend-title').textContent = mode.trend;
     root.querySelector('#structure-title').textContent = mode.structure;
     root.querySelector('#trend-subtitle').textContent = data ? {
-      income: data.panels.income.trend.some(point => point.future) ? 'Поступления по месяцам · серые подписи — будущие месяцы' : 'Поступления по месяцам',
+      income: data.panels.income.trend.some(point => point.future) ? 'Поступления по месяцам · серые подписи – будущие месяцы' : 'Поступления по месяцам',
       debt: 'На конец месяца · текущий месяц на дату среза',
       properties: 'Последние 12 календарных месяцев',
-      renewals: `${date(data.contract_start)} — ${date(data.contract_end)} · действующие договоры`,
+      renewals: `${date(data.contract_start)} – ${date(data.contract_end)} · действующие договоры`,
     }[selected] : '';
     root.querySelector('#structure-subtitle').textContent = data ? {
       income: dateRange(data),
@@ -160,7 +160,7 @@ export function mountDashboard(root) {
       const value = card.querySelector('.kpi-value');
       const context = card.querySelector('.kpi-context');
       if (!data) {
-        value.textContent = '—';
+        value.textContent = '–';
         value.removeAttribute('title');
         context.textContent = '';
         continue;
@@ -227,7 +227,7 @@ export function mountDashboard(root) {
 }
 
 function dateRange(data) {
-  return data.period_start ? `${date(data.period_start)} — ${date(data.period_end)}` : `До ${date(data.period_end)}`;
+  return data.period_start ? `${date(data.period_start)} – ${date(data.period_end)}` : `До ${date(data.period_end)}`;
 }
 
 const tooltip = { backgroundColor: '#2a2c34', titleColor: '#f2f1ef', bodyColor: '#f2f1ef', padding: 12 };

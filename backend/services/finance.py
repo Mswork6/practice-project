@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from ..database import commit
 from ..models import Accrual, Contract, Payment
 from ..schemas import FinancialTotals, PaymentIn
+from ..validation import FieldError
 
 ZERO = Decimal("0.00")
 
@@ -36,10 +37,12 @@ def financial_totals(db, scope, today):
     return FinancialTotals(billed=billed, paid=paid, remaining=remaining, overdue=overdue)
 
 
-def lock_accrual(db: Session, id: int):
+def lock_accrual(db: Session, id: int, *, field=None):
     # Payment, edit and delete all lock the same row before querying its payments.
     accrual = db.get(Accrual, id, with_for_update=True)
     if accrual is None:
+        if field:
+            raise FieldError(404, "Начисление не найдено.", field)
         raise HTTPException(404, "Начисление не найдено.")
     return accrual
 
@@ -53,15 +56,15 @@ def lock_unpaid_accrual(db: Session, id: int):
 
 def validate_payment(db: Session, accrual: Accrual, amount: Decimal, payment_date: date, today: date, *, excluding=None):
     if payment_date > today:
-        raise HTTPException(422, "Дата платежа не может быть позже сегодняшней даты.")
+        raise FieldError(422, "Дата платежа не может быть позже сегодняшней даты.", "payment_date")
     if payment_date < accrual.accrual_date:
-        raise HTTPException(422, "Дата платежа не может предшествовать дате начисления.")
+        raise FieldError(422, "Дата платежа не может предшествовать дате начисления.", "payment_date")
     query = select(func.sum(Payment.amount)).where(Payment.accrual_id == accrual.id)
     if excluding is not None:
         query = query.where(Payment.id != excluding)
     paid = db.scalar(query) or ZERO
     if paid + amount > accrual.amount:
-        raise HTTPException(409, f"Платёж превышает остаток начисления ({accrual.amount - paid:.2f} ₽).")
+        raise FieldError(409, f"Платёж превышает остаток начисления ({accrual.amount - paid:.2f} ₽).", "amount")
 
 
 def lock_payment(db: Session, id: int):
@@ -78,7 +81,7 @@ def lock_payment(db: Session, id: int):
 
 
 def register_payment(db: Session, data: PaymentIn, today: date):
-    accrual = lock_accrual(db, data.accrual_id)
+    accrual = lock_accrual(db, data.accrual_id, field="accrual_id")
     validate_payment(db, accrual, data.amount, data.payment_date, today)
     record = Payment(**data.model_dump())
     db.add(record)

@@ -5,16 +5,16 @@ import { badge, contractStates, date, escape, notify, number, propertyStatuses, 
 import { contractDetail } from './contracts.js';
 
 const endpoint = 'properties';
-const area = (value) => value == null ? '—' : `${number(value)} м²`;
+const area = (value) => value == null ? '–' : `${number(value)} м²`;
 
 function edit(record, reload) {
   const view = editView(record ? 'Редактирование объекта' : 'Новый объект', `
     ${field('name', 'Наименование', record?.name, 'required maxlength="200" autofocus', true)}
     ${selectField('type', 'Категория', propertyTypes, record?.type)}
-    <p class="lookup-hint">${record ? `Статус — ${propertyStatuses[record.status]}. ` : ''}Использование определяется автоматически по действующей аренде.</p>
+    ${record ? `<p class="lookup-hint">Статус – ${propertyStatuses[record.status]}.</p>` : ''}
     ${field('address', 'Адрес', record?.address, 'required maxlength="300"', true)}
-    ${field('area', 'Площадь, м²', record?.area, 'type="number" min="0.01" step="0.01"')}
-    ${field('cadastral_number', 'Кадастровый номер', record?.cadastral_number, 'maxlength="80"')}
+    ${field('area', 'Площадь, м²', record?.area, 'inputmode="decimal" data-decimal')}
+    ${field('cadastral_number', 'Кадастровый номер', record?.cadastral_number, 'maxlength="80" placeholder="00:00:0000000:000"')}
     ${noteField('note', 'Примечание', record?.note)}`);
   bindForm(view, async (values) => {
     const data = Object.fromEntries([...values].map(([key, value]) => [key, value.trim() || null]));

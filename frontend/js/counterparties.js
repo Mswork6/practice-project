@@ -10,8 +10,8 @@ const endpoint = 'counterparties';
 function edit(record, reload) {
   const view = editView(record ? 'Редактирование контрагента' : 'Новый контрагент', `
     ${field('name', 'Наименование', record?.name, 'required maxlength="200" autofocus', true)}
-    ${field('tax_id', 'ИНН', record?.tax_id, 'required inputmode="numeric" maxlength="24"')}
-    ${field('email', 'Электронная почта', record?.email, 'type="email" maxlength="250" placeholder="office@example.com"')}`);
+    ${field('tax_id', 'ИНН', record?.tax_id, 'required inputmode="numeric" placeholder="10 или 12 цифр"')}
+    ${field('email', 'Электронная почта', record?.email, 'type="email" maxlength="250" placeholder="name@example.com"')}`);
   bindForm(view, async values => {
     const data = Object.fromEntries([...values].map(([key, value]) => [key, value.trim() || null])
       .filter(([key, value]) => !record || value !== record[key]));
@@ -57,7 +57,7 @@ export const counterparties = {
   endpoint, title: 'Реестр контрагентов', subtitle: 'Организации и предприниматели, связанные с договорами',
   addLabel: 'Добавить контрагента', searchHint: 'Наименование или ИНН', filters: [],
   columns: ['Наименование', 'ИНН', 'Всего договоров', 'Действующие договоры'],
-  renderRow: record => `<tr><td>${recordButton(record, record.name)}</td><td>${escape(record.tax_id ?? '—')}</td>
+  renderRow: record => `<tr><td>${recordButton(record, record.name)}</td><td>${escape(record.tax_id ?? '–')}</td>
     <td>${number(record.contract_count)}</td><td>${number(record.active_contract_count)}</td></tr>`,
   edit, detail,
 };

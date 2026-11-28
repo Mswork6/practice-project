@@ -9,6 +9,21 @@ def valid_tax_id(value):
     return bool(value and re.fullmatch(r"[0-9]{10}|[0-9]{12}", value))
 
 
+def tax_check_digit(prefix, weights):
+    return str(sum(int(digit) * weight for digit, weight in zip(prefix, weights)) % 11 % 10)
+
+
+def complete_tax_id(prefix):
+    if len(prefix) == 9:
+        return prefix + tax_check_digit(prefix, (2, 4, 10, 3, 5, 9, 4, 6, 8))
+    prefix += tax_check_digit(prefix, (7, 2, 4, 10, 3, 5, 9, 4, 6, 8))
+    return prefix + tax_check_digit(prefix, (3, 7, 2, 4, 10, 3, 5, 9, 4, 6, 8))
+
+
+def valid_tax_checksum(value):
+    return valid_tax_id(value) and bool(value.strip("0")) and value == complete_tax_id(value[:9 if len(value) == 10 else 10])
+
+
 def clean_email(value):
     if value is None or not value.strip():
         return None

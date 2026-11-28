@@ -1,4 +1,5 @@
-import { api } from './api.js';
+import { api, FormError } from './api.js';
+import { updateRequiredMark } from './form-validation.js';
 import { bindForm, bindLookup, confirmAction, confirmDelete, editView, field, fieldsTable, lookup, noteField, loadDetail, relatedTable, selectField } from './dialog.js';
 import { accrualDetail } from './finance.js';
 import { financialSummary } from './financial-summary.js';
@@ -53,7 +54,7 @@ function setupFilters(form, initial, reload) {
 }
 
 function term(record) {
-  if (record.state !== 'active') return ['—', ''];
+  if (record.state !== 'active') return ['–', ''];
   if (record.days_remaining == null) return ['Без даты', ''];
   if (record.days_remaining === 0) return ['Истекает сегодня', 'attention'];
   return [`${record.days_remaining} дн.`, record.days_remaining <= 30 ? 'attention' : ''];
@@ -79,12 +80,14 @@ function edit(record, reload, source = null) {
     ${lookup('counterparty_id', 'Контрагент', 'Название или ИНН')}
     ${field('start_date', 'Дата начала', record?.start_date ?? day, `type="date" required${earliestStart ? ` min="${earliestStart}"` : ''}${active ? ` max="${day}"` : ''}`)}
     ${field('end_date', 'Дата окончания', record?.end_date, 'type="date"')}
-    ${field('amount', 'Сумма по договору, ₽', initial?.amount, 'type="number" min="0.01" step="0.01"')}
+    ${field('amount', 'Сумма по договору, ₽', initial?.amount, 'inputmode="decimal" data-decimal')}
     ${noteField('note', 'Примечание', source ? `На основе договора № ${source.number}.` : record?.note)}`);
   const form = bindForm(view, async (values) => {
     const data = Object.fromEntries([...values].map(([key, value]) => [key, value.trim() || null]));
     if (source?.property_archived && data.property_id === String(source.property_id)) {
-      throw new Error('Восстановите исходный объект из архива или выберите другой объект.');
+      throw new FormError('', [{
+        loc: ['body', 'property_id'], msg: 'Восстановите исходный объект из архива или выберите другой объект.',
+      }]);
     }
     const url = record ? `${endpoint}/${record.id}` : source ? `${endpoint}/${source.id}/successor` : endpoint;
     await api(url, { method: record ? 'PATCH' : 'POST', data });
@@ -104,13 +107,17 @@ function edit(record, reload, source = null) {
     form.elements.end_date.required = form.elements.type.value !== 'sale' || (active && Boolean(record.end_date));
     form.elements.end_date.min = active && start < day ? day : start;
     form.elements.end_date.max = active ? record.end_date ?? '' : '';
+    form.elements.end_date.dataset.minMessage = active && start < day ?
+      'Изменённые даты должны оставлять договор действующим на сегодня.' : 'Дата окончания не может быть раньше даты начала.';
+    form.elements.end_date.dataset.maxMessage = 'Увеличить срок действующей аренды можно через действие «Продлить».';
+    updateRequiredMark(form.elements.end_date);
   }
   updateEndDate();
   form.elements.type.addEventListener('change', () => {
     updateEndDate();
     refreshProperties(record?.property_archived || form.elements.type.value === initial?.type ? linkedProperty : null);
   });
-  form.elements.start_date.addEventListener('change', updateEndDate);
+  form.elements.start_date.addEventListener('input', updateEndDate);
 }
 
 function editNote(record, reload) {
@@ -158,7 +165,7 @@ export function contractDetail(id, reload) {
         ['Объект', record.property_archived ? `${record.property_name} · архив` : record.property_name],
         ['Контрагент', record.counterparty_name], ['Дата начала', date(record.start_date)],
         ['Дата окончания', date(record.end_date)], ['Статус договора', contractStates[record.state]],
-        ...(active ? [['Осталось', term(record)[0]]] : []), ['Сумма', record.amount == null ? '—' : money(record.amount)],
+        ...(active ? [['Осталось', term(record)[0]]] : []), ['Сумма', record.amount == null ? '–' : money(record.amount)],
         ['Примечание', record.note, true],
       ])}
       ${financialSummary(record.finance)}
@@ -210,7 +217,7 @@ export const contracts = {
     return `<tr><td>${recordButton(item, item.number)}
       <span class="secondary">${escape(contractTypes[item.type])} · ${escape(item.property_name)}</span></td>
       <td>${escape(item.counterparty_name)}</td><td class="number">${date(item.start_date)}</td><td class="number">${date(item.end_date)}</td>
-      <td>${badge(...term(item))}</td><td class="number">${item.amount == null ? '—' : money(item.amount)}</td>
+      <td>${badge(...term(item))}</td><td class="number">${item.amount == null ? '–' : money(item.amount)}</td>
       <td>${badge(contractStates[item.state], tone)}</td></tr>`;
   },
   edit, detail: contractDetail,

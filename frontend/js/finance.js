@@ -8,9 +8,9 @@ const endpoint = 'accruals';
 function edit(record, reload) {
   const view = editView(record ? 'Редактирование начисления' : 'Новое начисление', `
     ${lookup('contract_id', 'Договор', 'Номер, объект или контрагент')}
-    ${field('amount', 'Сумма начисления, ₽', record?.amount, 'type="number" min="0.01" step="0.01" required')}
+    ${field('amount', 'Сумма начисления, ₽', record?.amount, 'inputmode="decimal" data-decimal required')}
     ${field('accrual_date', 'Дата начисления', record?.accrual_date ?? today(), 'type="date" required')}
-    ${field('due_date', 'Срок оплаты', record?.due_date, 'type="date" required')}
+    ${field('due_date', 'Срок оплаты', record?.due_date, 'type="date" required data-min-message="Срок оплаты не может предшествовать дате начисления."')}
     ${noteField('description', 'Описание', record?.description)}`);
   const form = bindForm(view, async (values) => {
     const data = Object.fromEntries([...values].map(([key, value]) => [key, value.trim() || null]));
@@ -22,7 +22,7 @@ function edit(record, reload) {
     id: record.contract_id, number: record.contract_number, property_name: record.property_name,
   });
   function updateDueDate() { form.elements.due_date.min = form.elements.accrual_date.value; }
-  form.elements.accrual_date.addEventListener('change', updateDueDate);
+  form.elements.accrual_date.addEventListener('input', updateDueDate);
   updateDueDate();
 }
 
@@ -30,9 +30,10 @@ function paymentForm(record, reload, editing = false) {
   const day = today();
   const accrual = editing ? record.accrual_id : record.id;
   const view = editView(editing ? 'Редактирование платежа' : 'Новый платёж', `
-    <p class="full-width subheading">Максимальная сумма платежа по начислению № ${accrual} — ${money(record.payment_limit)}.</p>
-    ${field('amount', 'Сумма платежа, ₽', editing ? record.amount : '', `type="number" min="0.01" step="0.01" max="${escape(record.payment_limit)}" required autofocus`)}
-    ${field('payment_date', 'Дата платежа', editing ? record.payment_date : day, `type="date" min="${escape(record.accrual_date)}" max="${day}" required`)}`);
+    <p class="full-width subheading">Максимальная сумма платежа по начислению № ${accrual} – ${money(record.payment_limit)}.</p>
+    ${field('amount', 'Сумма платежа, ₽', editing ? record.amount : '', `inputmode="decimal" data-decimal data-limit="${escape(record.payment_limit)}" required autofocus`)}
+    ${field('payment_date', 'Дата платежа', editing ? record.payment_date : day, `type="date" min="${escape(record.accrual_date)}" max="${day}" required
+      data-min-message="Дата платежа не может предшествовать дате начисления." data-max-message="Дата платежа не может быть позже сегодняшней даты."`)}`);
   bindForm(view, async (values) => {
     const data = Object.fromEntries(values);
     if (editing) await api(`payments/${record.id}`, { method: 'PATCH', data });
@@ -112,7 +113,7 @@ export const finance = {
     return `<tr><td>${recordButton(item, `№ ${item.id} · ${item.contract_number}`)}<span class="secondary">${escape(item.property_name)}</span></td>
       <td class="number">${date(item.due_date)}</td><td class="number">${money(item.amount)}</td>
       <td class="number">${money(item.paid)}</td><td class="number">${money(item.remaining)}</td>
-      <td class="number">${Number(item.overdue) > 0 ? badge(money(item.overdue), 'negative') : '—'}</td></tr>`;
+      <td class="number">${Number(item.overdue) > 0 ? badge(money(item.overdue), 'negative') : '–'}</td></tr>`;
   },
   edit, detail: accrualDetail,
 };

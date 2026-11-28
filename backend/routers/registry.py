@@ -12,6 +12,7 @@ from ..schemas import Page, PropertyIn, PropertyOut, PropertyPatch
 from ..schemas import CounterpartyDetail, CounterpartyFields, CounterpartyPatch
 from ..services.counterparty import normalize_tax_id
 from ..services.finance import financial_totals
+from ..validation import FieldError
 from ..services.registry import (
     OPEN_STATES, RENTAL_OBJECT_TYPES, ContractState, compatible, contract_state, property_contracts, property_status,
     remaining_term,
@@ -26,11 +27,9 @@ def property_query(today):
 
 
 def property_view(record, status, has_open_contracts):
-    return PropertyOut(
-        **PropertyIn.model_validate(record).model_dump(exclude={"status"}),
-        id=record.id, created_at=record.created_at, status=status,
-        can_archive=status != PropertyStatus.ARCHIVED and not has_open_contracts,
-    )
+    values = {key: getattr(record, key) for key in PropertyOut.model_fields if key != "can_archive"}
+    values["status"] = status
+    return PropertyOut(**values, can_archive=status != PropertyStatus.ARCHIVED and not has_open_contracts)
 
 
 def load_property(db, id, today):
@@ -63,12 +62,18 @@ def properties(
     return paginate(db, query.order_by(Property.id.desc()), page, page_size, lambda row: property_view(*row))
 
 
+property_constraints = {
+    "unique_property_cadastral_number": (409, "Объект с таким кадастровым номером уже существует.", "cadastral_number"),
+    "valid_property_cadastral_number": (422, "Некорректный формат кадастрового номера.", "cadastral_number"),
+}
+
+
 @router.post("/properties", response_model=PropertyOut, status_code=201)
 def create_property(data: PropertyIn, db: Db):
     reject_manual_usage(data.status)
     record = Property(**data.model_dump())
     db.add(record)
-    commit(db, "Объект не удалось сохранить из-за конфликта данных.")
+    commit(db, "Объект не удалось сохранить из-за конфликта данных.", constraints=property_constraints)
     return load_property(db, record.id, local_today())
 
 
@@ -97,12 +102,12 @@ def update_property(id: Id, data: PropertyPatch, db: Db):
             Contract.type.in_(tuple(RENTAL_OBJECT_TYPES)),
         )).all()
         if any(not compatible(kind, values["type"]) for kind in rental_types):
-            raise HTTPException(409, "Новая категория объекта несовместима с одним из незавершённых договоров аренды.")
+            raise FieldError(409, "Новая категория объекта несовместима с одним из незавершённых договоров аренды.", "type")
     if values["status"] != PropertyStatus.ARCHIVED:
         values["status"] = PropertyStatus.AVAILABLE
     for key, value in values.items():
         setattr(record, key, value)
-    commit(db, "Объект не удалось сохранить из-за конфликта данных.")
+    commit(db, "Объект не удалось сохранить из-за конфликта данных.", constraints=property_constraints)
     return load_property(db, id, today)
 
 
@@ -144,9 +149,9 @@ def counterparty_view(record, total, active):
 
 
 counterparty_constraints = {
-    "unique_counterparty_tax_id": (409, "Контрагент с таким ИНН уже существует."),
-    "valid_counterparty_tax_id": (422, "ИНН должен содержать 10 или 12 цифр."),
-    "tax_id": (422, "Укажите ИНН контрагента."),
+    "unique_counterparty_tax_id": (409, "Контрагент с таким ИНН уже существует.", "tax_id"),
+    "valid_counterparty_tax_id": (422, "ИНН должен содержать 10 или 12 цифр.", "tax_id"),
+    "tax_id": (422, "Укажите ИНН контрагента.", "tax_id"),
 }
 
 
@@ -173,7 +178,7 @@ def counterparty_detail(id: Id, db: Db):
 @router.patch("/counterparties/{id}", response_model=CounterpartyDetail)
 def update_counterparty(id: Id, data: CounterpartyPatch, db: Db):
     record = require(db, Counterparty, id, "Контрагент не найден.", lock=True)
-    values = merge(CounterpartyFields, record, data)
+    values = merge(CounterpartyIn, record, data)
     for key, value in values.items():
         setattr(record, key, value)
     commit(db, "Не удалось изменить контрагента.", constraints=counterparty_constraints)
@@ -273,7 +278,7 @@ def proposed_contract_state(db, status, values, today):
 
 def validate_contract_assignment(db, record, values, today):
     # Serialize contract assignment and scheduling with changes to the target property.
-    prop = require(db, Property, values["property_id"], "Связанный объект не найден.", lock=True)
+    prop = require(db, Property, values["property_id"], "Связанный объект не найден.", lock=True, field="property_id")
     changed_property = record.property_id != prop.id
     changed_schedule = any(getattr(record, key) != values[key] for key in ("start_date", "end_date"))
     incompatible = not compatible(values["type"], prop.type)
@@ -282,12 +287,12 @@ def validate_contract_assignment(db, record, values, today):
         scheduled = proposed_contract_state(db, record.status, values, today) in OPEN_STATES
     if prop.status == PropertyStatus.ARCHIVED:
         if changed_property:
-            raise HTTPException(409, "Нельзя назначить архивированный объект новому или перенесённому договору.")
+            raise FieldError(409, "Нельзя назначить архивированный объект новому или перенесённому договору.", "property_id")
         if scheduled:
-            raise HTTPException(409, "Восстановите объект из архива перед активацией или переносом начала договора.")
+            raise FieldError(409, "Восстановите объект из архива перед активацией или переносом начала договора.", "property_id")
     if incompatible and (changed_property or record.type != values["type"] or scheduled):
-        raise HTTPException(422, "Аренда земли доступна для участков, аренда недвижимости — для зданий и нежилых помещений.")
-    require(db, Counterparty, values["counterparty_id"], "Контрагент не найден.")
+        raise FieldError(422, "Аренда земли доступна для участков, аренда недвижимости – для зданий и нежилых помещений.", "property_id")
+    require(db, Counterparty, values["counterparty_id"], "Контрагент не найден.", field="counterparty_id")
 
 
 def prepare_contract(db, record, values, today):
@@ -298,7 +303,11 @@ def prepare_contract(db, record, values, today):
 
 
 def persist_contract(db, record, today):
-    commit(db, "Номер договора уже используется или связанная запись была удалена.")
+    commit(db, "Номер договора уже используется или связанная запись была удалена.", constraints={
+        "contracts_number_key": (409, "Договор с таким номером уже существует.", "number"),
+        "contracts_property_id_fkey": (409, "Выбранный объект стал недоступен.", "property_id"),
+        "contracts_counterparty_id_fkey": (409, "Выбранный контрагент стал недоступен.", "counterparty_id"),
+    })
     return load_contract(db, record.id, today)
 
 
@@ -332,7 +341,7 @@ def update_contract(id: Id, data: ContractPatch, db: Db):
         if state == ContractState.ACTIVE:
             end = values["end_date"]
             if record.end_date is not None and (end is None or end > record.end_date):
-                raise HTTPException(409, "Увеличить срок действующей аренды можно через действие «Продлить».")
+                raise FieldError(409, "Увеличить срок действующей аренды можно через действие «Продлить».", "end_date")
             if proposed_contract_state(db, record.status, values, today) != ContractState.ACTIVE:
                 raise HTTPException(409, "Изменённые даты должны оставлять договор действующим на сегодня.")
         prepare_contract(db, record, values, today)
@@ -366,7 +375,7 @@ def extend_contract(id: Id, data: ContractExtension, db: Db):
     if state != ContractState.ACTIVE or record.type not in RENTAL_OBJECT_TYPES or record.end_date is None:
         raise HTTPException(409, "Продлить можно только действующий договор аренды с датой окончания.")
     if data.end_date <= record.end_date:
-        raise HTTPException(422, "Новая дата окончания должна быть позже текущей даты окончания договора.")
+        raise FieldError(422, "Новая дата окончания должна быть позже текущей даты окончания договора.", "end_date")
     values = ContractIn.model_validate(record).model_dump()
     validate_contract_assignment(db, record, {**values, "end_date": data.end_date}, today)
     record.end_date = data.end_date
@@ -380,14 +389,14 @@ def create_successor(id: Id, data: ContractIn, db: Db):
     if state in OPEN_STATES:
         raise HTTPException(409, "Создать новый договор на основе можно после истечения срока, завершения или расторжения.")
     if state == ContractState.EXPIRED and data.start_date <= source.end_date:
-        raise HTTPException(422, "Новый договор должен начинаться после даты окончания предыдущего.")
+        raise FieldError(422, "Новый договор должен начинаться после даты окончания предыдущего.", "start_date")
 
     reference = f"На основе договора № {source.number}."
     note = data.note or ""
     if reference not in note:
         note = f"{reference}\n{note}" if note else reference
     if len(note) > 3000:
-        raise HTTPException(422, "Примечание вместе со ссылкой на предыдущий договор должно содержать не более 3000 символов.")
+        raise FieldError(422, "Примечание вместе со ссылкой на предыдущий договор должно содержать не более 3000 символов.", "note")
 
     record = Contract(status=ContractStatus.ACTIVE)
     prepare_contract(db, record, {**data.model_dump(), "note": note}, today)

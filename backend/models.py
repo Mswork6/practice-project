@@ -6,6 +6,7 @@ from sqlalchemy import CheckConstraint, Date, Enum, ForeignKey, Numeric, String,
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from .config import local_today
+from .services.requisites import CADASTRAL_PATTERN
 
 
 class PropertyType(StrEnum):
@@ -50,7 +51,11 @@ def choices(values):
 
 class Property(Base):
     __tablename__ = "properties"
-    __table_args__ = (CheckConstraint("area > 0", name="positive_property_area"),)
+    __table_args__ = (
+        CheckConstraint("area > 0", name="positive_property_area"),
+        UniqueConstraint("cadastral_number", name="unique_property_cadastral_number"),
+        CheckConstraint(f"cadastral_number ~ '{CADASTRAL_PATTERN}'", name="valid_property_cadastral_number"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(200))

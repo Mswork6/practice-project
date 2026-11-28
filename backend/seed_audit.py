@@ -8,8 +8,10 @@ from sqlalchemy.orm import Session
 
 from .models import Contract, ContractStatus, ContractType, PropertyStatus, PropertyType
 from .seed import TABLES
+from .services.counterparty import clean_email, valid_tax_checksum
 from .services.dashboard import calculate, months_between, shift_month
 from .services.registry import contract_state
+from .services.requisites import valid_cadastral
 
 MARKERS = re.compile(r"демо|demo|тест|\btest\b|synthetic|синтетическ", re.IGNORECASE)
 REFERENCE = re.compile(r"На основе договора № ([\w/-]+)\.")
@@ -35,6 +37,15 @@ def audit(db: Session, today):
         if not condition:
             raise ValueError(f"Не пройдена проверка наполнения: {description}")
         checks.append(description)
+
+    tax_ids = {party.tax_id for party in parties.values()}
+    cadastral = [prop.cadastral_number for prop in properties.values() if prop.cadastral_number is not None]
+    require(len(tax_ids) == len(parties) and all(map(valid_tax_checksum, tax_ids)),
+            "ИНН уникальны и проходят проверку контрольных цифр")
+    require(all(clean_email(party.email) == party.email for party in parties.values()),
+            "адреса электронной почты корректны или отсутствуют")
+    require(len(set(cadastral)) == len(cadastral) and all(map(valid_cadastral, cadastral)),
+            "заполненные кадастровые номера корректны и уникальны")
 
     require(all(c.property_id in properties and c.counterparty_id in parties for c in contracts.values())
             and all(a.contract_id in contracts for a in accruals.values())

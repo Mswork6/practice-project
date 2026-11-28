@@ -8,6 +8,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .config import database_url
+from .validation import FieldError
 
 
 @cache
@@ -35,7 +36,7 @@ def commit(db: Session, conflict: str, *, constraints=None) -> None:
         db.rollback()
         error = constraints and constraints.get(exc.orig.diag.constraint_name or exc.orig.diag.column_name)
         if error:
-            raise HTTPException(*error) from None
+            raise FieldError(*error) from None
         if exc.orig.sqlstate in {"23503", "23505"}:
             raise HTTPException(409, conflict) from None
         if exc.orig.sqlstate == "23514":

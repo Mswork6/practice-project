@@ -13,7 +13,7 @@ export function closeLookup() {
 export function lookup(name, label, searchHint) {
   const id = `lookup-${++sequence}`;
   return `<div class="lookup${name === 'contract_id' ? ' full-width' : ''}" data-lookup="${name}">
-    <label for="${id}" class="filter-label">${escape(label)}</label>
+    <label for="${id}" class="filter-label">${escape(label)} *</label>
     <div class="lookup-control">
       <input id="${id}" type="text" role="combobox" autocomplete="off" maxlength="200" required
         aria-autocomplete="list" aria-expanded="false" aria-controls="${id}-list" placeholder="${escape(searchHint)}">
@@ -186,9 +186,11 @@ export function bindLookup(form, name, endpoint, describe, initial, filters = ()
   }
 
   function choose(item) {
+    const changed = selected?.id !== item?.id;
     selected = item;
     close();
     displaySelection();
+    if (changed) input.dispatchEvent(new Event('change'));
   }
 
   const delayedLoad = debounce(load);

@@ -11,7 +11,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from .database import get_engine
 from .refresh_demo import default_pg_bin, verified_backup
-from .seed import make_parties, tax_number
+from .seed import legacy_individual_tax_number, make_parties
 from .services.counterparty import clean_email, normalize_tax_id, valid_tax_id
 
 
@@ -35,7 +35,7 @@ def plan(connection):
     rows = connection.execute(text("SELECT id, name, tax_id, contact FROM counterparties ORDER BY id")).all()
     demos = list(enumerate(make_parties(), 1))
     fixes = {
-        (party.name, tax_number(index, True, individual_width=11), party.email): party.tax_id
+        (party.name, legacy_individual_tax_number(index), party.email): party.tax_id
         for index, party in demos if party.name.startswith("ИП ")
     }
     report = {

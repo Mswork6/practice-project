@@ -13,6 +13,7 @@ from .database import get_engine
 from .models import Accrual, Contract, ContractStatus, ContractType, Counterparty, Payment, Property
 from .models import PropertyStatus, PropertyType
 from .seed_catalog import ARCHIVE_NOTES, PARTIES, PROPERTY_NOTES, PROPERTY_PROFILES, STREETS
+from .services.counterparty import complete_tax_id, tax_check_digit
 from .services.dashboard import shift_month
 from .services.registry import compatible, property_status
 
@@ -66,12 +67,13 @@ def make_properties(random: Random, today: date):
             if kind == PropertyType.PREMISES:
                 address += f", пом. {random.randint(1, 16)}"
             note = random.choice(ARCHIVE_NOTES if archived else PROPERTY_NOTES) if random.random() < .43 else None
+            cadastral = f"66:00:{9200100 + serial // 9:07d}:{random.randint(40, 64) * 100 + serial}"
             properties.append(Property(
                 name=profiles[index % len(profiles)],
                 type=kind,
                 address=address,
                 area=amount(Decimal(random.randint(*area_range)) + Decimal(random.randrange(0, 91, 10)) / 100),
-                cadastral_number=f"66:00:{9200100 + serial // 9:07d}:{random.randint(40, 64) * 100 + serial}",
+                cadastral_number=None if serial % 11 == 0 else cadastral,
                 status=PropertyStatus.ARCHIVED if archived else PropertyStatus.AVAILABLE,
                 created_at=created,
                 note=note,
@@ -79,15 +81,16 @@ def make_properties(random: Random, today: date):
     return properties
 
 
-def tax_number(index, individual, *, individual_width=10):
-    digits = [int(digit) for digit in f"{index + 7450110:0{individual_width if individual else 9}d}"]
-    if individual:
-        digits.append(sum(a * b for a, b in zip(digits, (7, 2, 4, 10, 3, 5, 9, 4, 6, 8))) % 11 % 10)
-        weights = (3, 7, 2, 4, 10, 3, 5, 9, 4, 6, 8)
-    else:
-        weights = (2, 4, 10, 3, 5, 9, 4, 6, 8)
-    digits.append(sum(a * b for a, b in zip(digits, weights)) % 11 % 10)
-    return "".join(map(str, digits))
+def tax_number(index, individual):
+    width = 10 if individual else 9
+    return complete_tax_id(f"{index + 7450110:0{width}d}")
+
+
+def legacy_individual_tax_number(index):
+    # Reproduce the old 13-digit value to identify records made by that generator.
+    prefix = f"{index + 7450110:011d}"
+    return (prefix + tax_check_digit(prefix, (7, 2, 4, 10, 3, 5, 9, 4, 6, 8))
+            + tax_check_digit(prefix, (3, 7, 2, 4, 10, 3, 5, 9, 4, 6, 8)))
 
 
 def make_parties():

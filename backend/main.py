@@ -6,6 +6,7 @@ from sqlalchemy.exc import OperationalError, ProgrammingError
 
 from .config import ROOT
 from .routers import dashboard, finance, registry
+from .validation import FieldError, validation_errors
 
 FRONTEND = ROOT / "frontend"
 app = FastAPI(title="Учёт муниципального имущества", version="1.0.0")
@@ -22,11 +23,12 @@ def index():
 
 @app.exception_handler(RequestValidationError)
 async def invalid_request(_request: Request, exc: RequestValidationError):
-    errors = [
-        {"loc": error["loc"], "type": error["type"], "msg": error["msg"]}
-        for error in exc.errors()
-    ]
-    return JSONResponse({"detail": errors}, status_code=422)
+    return JSONResponse({"detail": validation_errors(exc.errors())}, status_code=422)
+
+
+@app.exception_handler(FieldError)
+async def invalid_field(_request: Request, exc: FieldError):
+    return JSONResponse({"detail": exc.detail, "errors": exc.errors}, status_code=exc.status_code)
 
 
 @app.exception_handler(OperationalError)

@@ -6,16 +6,19 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..schemas import Page
+from ..validation import FieldError, validation_errors
 
 PageNumber = Annotated[int, Query(ge=1, le=100_000)]
 PageSize = Annotated[int, Query(ge=1, le=100)]
 Search = Annotated[str, Query(max_length=200)]
 
 
-def require(db: Session, model, id: int, message: str, *, lock: bool = False):
+def require(db: Session, model, id: int, message: str, *, lock: bool = False, field=None):
     # Serialize writers without blocking a foreign-key check on an unchanged primary key.
     row = db.get(model, id, with_for_update={"key_share": True} if lock else None)
     if row is None:
+        if field:
+            raise FieldError(404, message, field)
         raise HTTPException(404, message)
     return row
 
@@ -32,6 +35,7 @@ def merge(model, record, patch):
     try:
         return model.model_validate(merged | fields).model_dump()
     except ValidationError as exc:
-        message = exc.errors(include_input=False)[0]
-        detail = str(message["ctx"]["error"]) if "ctx" in message else "Проверьте обязательные поля."
-        raise HTTPException(422, detail) from None
+        error = validation_errors(exc.errors(include_input=False))[0]
+        if error["loc"]:
+            raise FieldError(422, error["msg"], error["loc"][-1]) from None
+        raise HTTPException(422, error["msg"]) from None

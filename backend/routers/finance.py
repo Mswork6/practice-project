@@ -11,6 +11,9 @@ from ..services.finance import ZERO, lock_payment, lock_unpaid_accrual, register
 from .common import PageNumber, PageSize, Search, merge, paginate, require
 
 router = APIRouter(tags=["Финансы"])
+accrual_constraints = {
+    "accruals_contract_id_fkey": (409, "Выбранный договор стал недоступен.", "contract_id"),
+}
 
 
 def accrual_query(today):
@@ -72,10 +75,10 @@ def accrual_detail(id: Id, db: Db):
 
 @router.post("/accruals", response_model=AccrualOut, status_code=201)
 def create_accrual(data: AccrualIn, db: Db):
-    require(db, Contract, data.contract_id, "Договор не найден.")
+    require(db, Contract, data.contract_id, "Договор не найден.", field="contract_id")
     row = Accrual(**data.model_dump())
     db.add(row)
-    commit(db, "Договор стал недоступен во время сохранения начисления.")
+    commit(db, "Договор стал недоступен во время сохранения начисления.", constraints=accrual_constraints)
     return accrual_detail(row.id, db)
 
 
@@ -83,10 +86,10 @@ def create_accrual(data: AccrualIn, db: Db):
 def update_accrual(id: Id, data: AccrualPatch, db: Db):
     row = lock_unpaid_accrual(db, id)
     values = merge(AccrualIn, row, data)
-    require(db, Contract, values["contract_id"], "Договор не найден.")
+    require(db, Contract, values["contract_id"], "Договор не найден.", field="contract_id")
     for key, value in values.items():
         setattr(row, key, value)
-    commit(db, "Не удалось изменить начисление из-за изменения связанных записей.")
+    commit(db, "Не удалось изменить начисление из-за изменения связанных записей.", constraints=accrual_constraints)
     return accrual_detail(id, db)
 
 

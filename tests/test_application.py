@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from backend.main import app
 from backend.models import Accrual, Payment
-from backend.seed import TABLES, populate
+from backend.seed import TABLES, populate, tax_number
 from conftest import AS_OF
 
 PROPERTY = {"name": "Тестовое здание", "type": "building", "address": "г. Береговой, ул. Новая, 15"}
@@ -35,7 +35,7 @@ def assert_payment(client, payment):
 
 def create_agreement(client, **changes):
     prop = create(client, "properties", PROPERTY)
-    party = create(client, "counterparties", {"name": "Тестовый контрагент", "tax_id": f"{prop['id']:010d}"})
+    party = create(client, "counterparties", {"name": "Тестовый контрагент", "tax_id": tax_number(prop["id"], False)})
     body = {**CONTRACT, "property_id": prop["id"], "counterparty_id": party["id"], **changes}
     return create(client, "contracts", body), body
 
@@ -173,7 +173,7 @@ def test_term_windows_and_category_labels(client):
 def test_registry_search_filters_patch_delete(client):
     agreement, body = create_agreement(client)
     prop = create(client, "properties", {
-        "name": "Участок _100% тест", "type": "land", "address": "Лесная 14", "cadastral_number": "66:00:42",
+        "name": "Участок _100% тест", "type": "land", "address": "Лесная 14", "cadastral_number": "66:00:42:1",
     })
     for search in ("ЛЕСНАЯ", "66:00:42", "_100%"):
         assert client.get("/api/properties", params={"search": search}).json()["items"] == [prop]

@@ -223,7 +223,7 @@ dialog[open]::backdrop { background: #090a0dc4; }
   .dialog-content { scrollbar-width: thin; scrollbar-color: #565963 transparent; }
   .dialog-content:hover { scrollbar-color: #707481 transparent; }
 }
-.form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; }
+.form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 15px; }
 .full-width { grid-column: 1 / -1; }
 .form-actions, .detail-actions { display: flex; justify-content: flex-start; gap: 8px; flex-wrap: wrap; margin-top: 20px; }
 .page-slots { display: flex; gap: 4px; }
@@ -244,6 +244,7 @@ dialog[open]::backdrop { background: #090a0dc4; }
 .accent-text { color: var(--gold-light); }
 @media (max-width: 500px) { .pagination .page-slots { display: none; } }
 .form-error { color: var(--red); line-height: 1.45; margin-top: 12px; }
+.field-error:not([hidden]) { display: block; color: var(--red); font-size: .8125rem; line-height: 1.4; margin-top: 5px; }
 .detail-fields { margin: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .detail-fields dt { font-size: .84rem; color: var(--muted); margin-bottom: 3px; }
 .detail-fields dd { margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; }

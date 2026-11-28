@@ -1,6 +1,7 @@
 import { api } from './api.js';
 import { escape, notify, options, reveal } from './ui.js';
 import { closeLookup } from './lookup.js';
+import { bindValidation } from './form-validation.js';
 import { relatedPage } from './paged-table.js';
 
 export { bindLookup, lookup } from './lookup.js';
@@ -237,16 +238,16 @@ export function openDialog(heading, html, opener = document.activeElement) {
 
 export function fieldsTable(fields) {
   return `<dl class="detail-fields">${fields.map(([label, value, wide]) => `
-    <div${wide ? ' class="full-width"' : ''}><dt>${escape(label)}</dt><dd>${escape(value ?? '—')}</dd></div>`).join('')}</dl>`;
+    <div${wide ? ' class="full-width"' : ''}><dt>${escape(label)}</dt><dd>${escape(value ?? '–')}</dd></div>`).join('')}</dl>`;
 }
 
 export function field(name, label, value, input = '', wide = false) {
-  return `<label${wide ? ' class="full-width"' : ''}><span>${escape(label)}</span>
+  return `<label${wide ? ' class="full-width"' : ''}><span>${escape(label)}<span data-required-mark hidden> *</span></span>
     <input name="${name}" value="${escape(value)}" ${input}></label>`;
 }
 
 export function selectField(name, label, values, current) {
-  return `<label><span>${escape(label)}</span><select name="${name}" required>${options(values, current)}</select></label>`;
+  return `<label><span>${escape(label)}<span data-required-mark hidden> *</span></span><select name="${name}" required>${options(values, current)}</select></label>`;
 }
 
 export function noteField(name, label, value) {
@@ -254,7 +255,7 @@ export function noteField(name, label, value) {
 }
 
 export function editView(heading, fields, submitLabel = 'Сохранить', cancelLabel = 'Отмена') {
-  return openDialog(heading, `<form><div class="form-grid">${fields}</div>
+  return openDialog(heading, `<form novalidate><div class="form-grid">${fields}</div>
     <p class="form-error" role="alert" hidden></p>
     <div class="form-actions"><button type="button" class="button" data-cancel>${cancelLabel}</button>
     <button type="submit" class="button primary">${submitLabel}</button></div></form>`);
@@ -270,6 +271,7 @@ export function bindForm(view, onSubmit, { guard = true, closeParent = false, ch
   const form = view.content.querySelector('form');
   const submitButton = form.querySelector('[type="submit"]');
   const cancel = form.querySelector('[data-cancel]');
+  const validation = bindValidation(form);
   const snapshot = () => JSON.stringify([...new FormData(form)]);
   if (guard) queueMicrotask(() => {
     const initial = snapshot();
@@ -280,14 +282,16 @@ export function bindForm(view, onSubmit, { guard = true, closeParent = false, ch
     event.preventDefault();
     if (view.busy()) return;
     formError(form, '');
+    const values = new FormData(form);
+    if (!validation.check(values)) return;
     view.setBusy(true);
     submitButton.disabled = true;
     cancel.disabled = true;
     try {
-      await onSubmit(new FormData(form));
+      await onSubmit(values);
       view.close({ closeParent, changed });
     } catch (error) {
-      formError(form, error.message);
+      formError(form, validation.showServer(error));
     } finally {
       view.setBusy(false);
       submitButton.disabled = false;

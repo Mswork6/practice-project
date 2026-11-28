@@ -1,15 +1,46 @@
 from datetime import date
 from decimal import Decimal
+import re
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator, model_validator
+from pydantic import AfterValidator, BaseModel, BeforeValidator, ConfigDict, Field, StringConstraints, field_validator
 
 from .models import ContractStatus, ContractType, PropertyStatus, PropertyType
-from .services.counterparty import clean_email, normalize_tax_id, valid_tax_id
+from .services.counterparty import clean_email, normalize_tax_id, valid_tax_checksum, valid_tax_id
 from .services.registry import ContractState
+from .services.requisites import normalize_cadastral, valid_cadastral
+
+
+def decimal_input(value):
+    if isinstance(value, str):
+        return value.strip().replace(",", ".")
+    return value
+
+
+def check_scale(value):
+    if value.as_tuple().exponent < -2:
+        raise ValueError("Укажите не более двух знаков после десятичного разделителя.")
+    return value
+
+
+def calendar_input(value):
+    if value is not None and type(value) is not date:
+        if not isinstance(value, str) or not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", value):
+            raise ValueError("Укажите корректную календарную дату.")
+    return value
+
+
+def check_cadastral(value):
+    if value is not None and not valid_cadastral(value):
+        raise ValueError("Некорректный формат кадастрового номера.")
+    return value
 
 Name = Annotated[str, StringConstraints(min_length=1, max_length=200)]
-PositiveAmount = Annotated[Decimal, Field(gt=0, max_digits=14, decimal_places=2, allow_inf_nan=False)]
+PositiveAmount = Annotated[
+    Decimal, Field(gt=0, max_digits=14, decimal_places=2, allow_inf_nan=False),
+    BeforeValidator(decimal_input), AfterValidator(check_scale),
+]
+CalendarDate = Annotated[date, BeforeValidator(calendar_input)]
 Id = Annotated[int, Field(gt=0, le=2_147_483_647)]
 Period = Literal["last12", "year", "all"]
 BalanceStatus = Literal["paid", "open", "overdue"]
@@ -24,7 +55,7 @@ class PropertyPatch(Schema):
     type: PropertyType | None = None
     address: Annotated[str, StringConstraints(min_length=1, max_length=300)] | None = None
     area: PositiveAmount | None = None
-    cadastral_number: Annotated[str, StringConstraints(max_length=80)] | None = None
+    cadastral_number: Annotated[str | None, BeforeValidator(normalize_cadastral), AfterValidator(check_cadastral)] = None
     status: PropertyStatus | None = None
     note: Annotated[str, StringConstraints(max_length=3000)] | None = None
 
@@ -36,8 +67,15 @@ class PropertyIn(PropertyPatch):
     status: PropertyStatus = PropertyStatus.AVAILABLE
 
 
-class PropertyOut(PropertyIn):
+class PropertyOut(Schema):
     id: Id
+    name: Name
+    type: PropertyType
+    address: str
+    area: Decimal | None
+    cadastral_number: str | None
+    status: PropertyStatus
+    note: str | None
     created_at: date
     can_archive: bool
 
@@ -51,6 +89,8 @@ class CounterpartyFields(Schema):
     @classmethod
     def check_tax_id(cls, value):
         value = normalize_tax_id(value)
+        if not value:
+            raise ValueError("Укажите ИНН контрагента.")
         if not valid_tax_id(value):
             raise ValueError("ИНН должен содержать 10 или 12 цифр.")
         return value
@@ -61,13 +101,18 @@ class CounterpartyFields(Schema):
         return clean_email(value)
 
 
-class CounterpartyPatch(CounterpartyFields):
+class CounterpartyIn(CounterpartyFields):
+    @field_validator("tax_id")
+    @classmethod
+    def check_checksum(cls, value):
+        if not valid_tax_checksum(value):
+            raise ValueError("Некорректный ИНН. Проверьте введённые цифры.")
+        return value
+
+
+class CounterpartyPatch(CounterpartyIn):
     name: Name | None = None
     tax_id: str | None = None
-
-
-class CounterpartyIn(CounterpartyFields):
-    pass
 
 
 class CounterpartyOut(CounterpartyFields):
@@ -92,8 +137,8 @@ class ContractPatch(Schema):
     type: ContractType | None = None
     property_id: Id | None = None
     counterparty_id: Id | None = None
-    start_date: date | None = None
-    end_date: date | None = None
+    start_date: CalendarDate | None = None
+    end_date: CalendarDate | None = None
     amount: PositiveAmount | None = None
     note: Annotated[str, StringConstraints(max_length=3000)] | None = None
 
@@ -103,15 +148,18 @@ class ContractIn(ContractPatch):
     type: ContractType
     property_id: Id
     counterparty_id: Id
-    start_date: date
+    start_date: CalendarDate
+    end_date: CalendarDate | None = Field(default=None, validate_default=True)
 
-    @model_validator(mode="after")
-    def check_dates(self):
-        if self.end_date is None and self.type != ContractType.SALE:
+    @field_validator("end_date")
+    @classmethod
+    def check_dates(cls, value, info):
+        kind, start = info.data.get("type"), info.data.get("start_date")
+        if value is None and kind is not None and kind != ContractType.SALE:
             raise ValueError("Укажите дату окончания договора.")
-        if self.end_date is not None and self.end_date < self.start_date:
-            raise ValueError("Дата окончания договора не может предшествовать дате начала.")
-        return self
+        if value is not None and start is not None and value < start:
+            raise ValueError("Дата окончания не может быть раньше даты начала.")
+        return value
 
 
 class ContractOut(ContractIn):
@@ -129,28 +177,29 @@ class ContractDetail(ContractOut):
 
 
 class ContractExtension(Schema):
-    end_date: date
+    end_date: CalendarDate
 
 
 class AccrualPatch(Schema):
     contract_id: Id | None = None
     amount: PositiveAmount | None = None
-    accrual_date: date | None = None
-    due_date: date | None = None
+    accrual_date: CalendarDate | None = None
+    due_date: CalendarDate | None = None
     description: Annotated[str, StringConstraints(max_length=3000)] | None = None
 
 
 class AccrualIn(AccrualPatch):
     contract_id: Id
     amount: PositiveAmount
-    accrual_date: date
-    due_date: date
+    accrual_date: CalendarDate
+    due_date: CalendarDate
 
-    @model_validator(mode="after")
-    def check_dates(self):
-        if self.due_date < self.accrual_date:
+    @field_validator("due_date")
+    @classmethod
+    def check_dates(cls, value, info):
+        if (accrual_date := info.data.get("accrual_date")) is not None and value < accrual_date:
             raise ValueError("Срок оплаты не может предшествовать дате начисления.")
-        return self
+        return value
 
 
 class AccrualOut(AccrualIn):
@@ -166,13 +215,13 @@ class AccrualOut(AccrualIn):
 
 class PaymentPatch(Schema):
     amount: PositiveAmount | None = None
-    payment_date: date | None = None
+    payment_date: CalendarDate | None = None
 
 
 class PaymentIn(PaymentPatch):
     accrual_id: Id
     amount: PositiveAmount
-    payment_date: date
+    payment_date: CalendarDate
 
 
 class PaymentOut(PaymentIn):

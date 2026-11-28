@@ -55,14 +55,15 @@ def test_contract_filters_match_analytics(client):
 
 def test_counterparty_lifecycle(client):
     party = create(client, "counterparties", {
-        "name": "Городская мастерская", "tax_id": "0012 34-5678", "email": " office@example.com ",
+        "name": "Городская мастерская", "tax_id": "0012 34-5673", "email": " office@example.com ",
     })
     url = f"/api/counterparties/{party['id']}"
-    assert party["tax_id"] == "0012345678"
+    assert party["tax_id"] == "0012345673"
     assert party["email"] == "office@example.com"
     assert client.get("/api/counterparties", params={"search": "0012-34", "page_size": 1}).json()["total"] == 1
-    conflict = client.post("/api/counterparties", json={"name": "Другая", "tax_id": "0012-345678"})
+    conflict = client.post("/api/counterparties", json={"name": "Другая", "tax_id": "0012-345673"})
     assert conflict.status_code == 409 and "ИНН" in conflict.json()["detail"]
+    assert conflict.json()["errors"][0]["loc"] == ["body", "tax_id"]
     assert client.patch(url, json={"tax_id": ""}).status_code == 422
     assert client.patch(url, json={"tax_id": None}).status_code == 422
     assert client.patch(url, json={"email": "   "}).json()["email"] is None
@@ -73,21 +74,24 @@ def test_counterparty_lifecycle(client):
 
 def test_parallel_counterparties_cannot_duplicate_tax_id(client):
     result = concurrent(
-        lambda: client.post("/api/counterparties", json={"name": "Один", "tax_id": "1234 567890"}),
-        lambda: client.post("/api/counterparties", json={"name": "Два", "tax_id": "1234567890"}),
+        lambda: client.post("/api/counterparties", json={"name": "Один", "tax_id": "1234 567894"}),
+        lambda: client.post("/api/counterparties", json={"name": "Два", "tax_id": "1234567894"}),
     )
     assert sorted(result) == [201, 409]
 
 
 def test_counterparty_without_email_accepts_twelve_digit_identifier(client):
-    party = create(client, "counterparties", {"name": "ИП", "tax_id": "000007450113"})
-    assert party["tax_id"] == "000007450113" and party["email"] is None
+    party = create(client, "counterparties", {"name": "ИП", "tax_id": "000007450104"})
+    assert party["tax_id"] == "000007450104" and party["email"] is None
     assert client.patch(f"/api/counterparties/{party['id']}", json={"email": None}).status_code == 200
+    assert client.patch(f"/api/counterparties/{party['id']}", json={"tax_id": "0012345673"}).json()["tax_id"] == "0012345673"
 
 
 @pytest.mark.parametrize("fields", [
     {}, {"tax_id": None}, {"tax_id": "  - "}, {"tax_id": "12345678901"},
     {"tax_id": "12345678ab"}, {"tax_id": "１２３４５６７８９０"}, {"tax_id": 1234567890},
+    {"tax_id": "0012345678"}, {"tax_id": "000007450114"}, {"tax_id": "000007450105"},
+    {"tax_id": "0000000000"}, {"tax_id": "000000000000"}, {"tax_id": "0012/345673"},
 ])
 def test_counterparty_rejects_missing_or_invalid_tax_id(client, fields):
     assert client.post("/api/counterparties", json={"name": "Контрагент", **fields}).status_code == 422
@@ -95,7 +99,7 @@ def test_counterparty_rejects_missing_or_invalid_tax_id(client, fields):
 
 @pytest.mark.parametrize("email", ["+7 333 1234567", "Контактное лицо", "user@example", "a..b@example.com", "a@-example.com"])
 def test_counterparty_rejects_non_email_values(client, email):
-    fields = {"name": "Контрагент", "tax_id": "0012345678"}
+    fields = {"name": "Контрагент", "tax_id": "0012345673"}
     assert client.post("/api/counterparties", json={**fields, "email": email}).status_code == 422
     party = create(client, "counterparties", fields)
     assert client.patch(f"/api/counterparties/{party['id']}", json={"email": email}).status_code == 422

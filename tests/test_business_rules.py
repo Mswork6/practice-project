@@ -21,7 +21,7 @@ def day(offset=0):
 def test_property_status_tracks_contract_lifecycle(client, monkeypatch):
     obj = create(client, "properties", PROPERTY)
     other = create(client, "properties", {**PROPERTY, "name": "Второй объект"})
-    contact = create(client, "counterparties", {"name": "Контрагент", "tax_id": "0012345678"})
+    contact = create(client, "counterparties", {"name": "Контрагент", "tax_id": "0012345673"})
     base = {**CONTRACT, "property_id": obj["id"], "counterparty_id": contact["id"]}
     url = f"/api/properties/{obj['id']}"
     status = lambda path: client.get(path).json()["status"]
@@ -190,7 +190,7 @@ def concurrent(first, second):
 
 def test_archive_serializes_with_contract_creation(client):
     prop = create(client, "properties", PROPERTY)
-    counterparty = create(client, "counterparties", {"name": "Контрагент", "tax_id": "0012345678"})
+    counterparty = create(client, "counterparties", {"name": "Контрагент", "tax_id": "0012345673"})
     property_url = f"/api/properties/{prop['id']}"
     statuses = concurrent(
         lambda: client.patch(property_url, json={"status": "archived"}),
