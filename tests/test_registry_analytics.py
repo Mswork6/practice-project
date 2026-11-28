@@ -62,7 +62,7 @@ def test_counterparty_lifecycle(client):
     assert party["email"] == "office@example.com"
     assert client.get("/api/counterparties", params={"search": "0012-34", "page_size": 1}).json()["total"] == 1
     conflict = client.post("/api/counterparties", json={"name": "Другая", "tax_id": "0012-345673"})
-    assert conflict.status_code == 409 and "ИНН" in conflict.json()["detail"]
+    assert conflict.status_code == 409 and conflict.json()["detail"] == "Контрагент с таким ИНН уже существует."
     assert conflict.json()["errors"][0]["loc"] == ["body", "tax_id"]
     assert client.patch(url, json={"tax_id": ""}).status_code == 422
     assert client.patch(url, json={"tax_id": None}).status_code == 422
@@ -87,14 +87,24 @@ def test_counterparty_without_email_accepts_twelve_digit_identifier(client):
     assert client.patch(f"/api/counterparties/{party['id']}", json={"tax_id": "0012345673"}).json()["tax_id"] == "0012345673"
 
 
-@pytest.mark.parametrize("fields", [
-    {}, {"tax_id": None}, {"tax_id": "  - "}, {"tax_id": "12345678901"},
-    {"tax_id": "12345678ab"}, {"tax_id": "１２３４５６７８９０"}, {"tax_id": 1234567890},
-    {"tax_id": "0012345678"}, {"tax_id": "000007450114"}, {"tax_id": "000007450105"},
-    {"tax_id": "0000000000"}, {"tax_id": "000000000000"}, {"tax_id": "0012/345673"},
+@pytest.mark.parametrize(("values", "message"), [
+    ([{}, {"tax_id": None}, {"tax_id": "  - "}], "Укажите ИНН контрагента."),
+    ([{"tax_id": value} for value in ("12345678901", "12345678ab", "１２３４５６７８９０", 1234567890, "0012/345673")],
+     "ИНН должен содержать 10 или 12 цифр."),
+    ([{"tax_id": value} for value in ("0012345678", "000007450114", "000007450105")],
+     "Некорректные контрольные цифры ИНН. Проверьте номер."),
+    ([{"tax_id": value} for value in ("0000000000", "000000000000")], "ИНН не может состоять только из нулей."),
 ])
-def test_counterparty_rejects_missing_or_invalid_tax_id(client, fields):
-    assert client.post("/api/counterparties", json={"name": "Контрагент", **fields}).status_code == 422
+def test_counterparty_rejects_missing_or_invalid_tax_id(client, values, message):
+    party = create(client, "counterparties", {"name": "Контрагент", "tax_id": "0012345673"})
+    for fields in values:
+        response = client.post("/api/counterparties", json={"name": "Контрагент", **fields})
+        assert response.status_code == 422
+        assert response.json()["detail"][0]["msg"] == message
+        if fields:
+            response = client.patch(f"/api/counterparties/{party['id']}", json=fields)
+            assert response.status_code == 422
+            assert response.json()["detail"][0]["msg"] == message
 
 
 @pytest.mark.parametrize("email", ["+7 333 1234567", "Контактное лицо", "user@example", "a..b@example.com", "a@-example.com"])

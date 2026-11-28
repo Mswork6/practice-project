@@ -173,9 +173,9 @@ def test_term_windows_and_category_labels(client):
 def test_registry_search_filters_patch_delete(client):
     agreement, body = create_agreement(client)
     prop = create(client, "properties", {
-        "name": "Участок _100% тест", "type": "land", "address": "Лесная 14", "cadastral_number": "66:00:42:1",
+        "name": "Участок _100% тест", "type": "land", "address": "Лесная 14", "cadastral_number": "66:00:000042:1",
     })
-    for search in ("ЛЕСНАЯ", "66:00:42", "_100%"):
+    for search in ("ЛЕСНАЯ", "66:00:000042", "_100%"):
         assert client.get("/api/properties", params={"search": search}).json()["items"] == [prop]
     filters = {"type": "land", "status": "in_use"}
     assert client.get("/api/properties", params=filters).json()["total"] == 0

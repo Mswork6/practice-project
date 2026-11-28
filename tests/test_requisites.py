@@ -4,6 +4,7 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError
 
 from backend.migrate_requisites import CHECK, UNIQUE, migrate, plan
 from backend.seed import legacy_individual_tax_number, make_parties
+from backend.services.requisites import CADASTRAL_KEY_INDEX
 from conftest import AS_OF
 from test_application import PROPERTY, create, create_agreement, make_accrual
 from test_business_rules import concurrent
@@ -19,35 +20,56 @@ def fields(response):
     return {error["loc"][-1]: error["msg"] for error in payload.get("errors", payload["detail"])}
 
 
-@pytest.mark.parametrize("value", ["1:2:3", "1:2:3:4:5", "1::3:4", "1:2:xyz:4", "１:2:3:4", "9" * 75 + ":1:2:34"])
+@pytest.mark.parametrize("value", [
+    "1:2:3:4", "744:36:0703001:125", "74:366:0703001:125", "74:36:123:125",
+    "74:36:00000001:125", "74:36:0703001:0125", "74:36:0703001:0", "74:36:0703001:000",
+    "74:36:ABC:125", "74:36:0703001", "74:36:0703001:125:1", "74::0703001:125",
+    "７４:36:0703001:125", "74:36:0703001:" + "9" * 67, "0:0:0:0125",
+    "00:00:0000000:125", "74:0:000001:125",
+])
 def test_property_rejects_malformed_cadastral_number(client, value):
     response = client.post("/api/properties", json={**PROPERTY, "cadastral_number": value})
     assert response.status_code == 422
     assert "cadastral_number" in fields(response)
 
 
+@pytest.mark.parametrize("value", [
+    "74:36:0703001:125", "74:36:070301:1", "02:05:0102003:12589", "74:36:0703001:123456",
+    "0:0:0:125", "74:36:0:125", "74:0:0:125", "74:00:0000000:125",
+    "74:36:0703001:" + "9" * 66,
+])
+def test_property_preserves_valid_cadastral_spelling(client, value):
+    assert create(client, "properties", PROPERTY | {"cadastral_number": f" {value} "})["cadastral_number"] == value
+
+
 def test_cadastral_number_lifecycle(client):
-    first = create(client, "properties", {**PROPERTY, "cadastral_number": " 00:2:00003:004 "})
+    first = create(client, "properties", {**PROPERTY, "cadastral_number": " 02:05:0102003:125 "})
     second = create(client, "properties", {**PROPERTY, "cadastral_number": " "})
-    assert first["cadastral_number"] == "00:2:00003:004"
+    assert first["cadastral_number"] == "02:05:0102003:125"
     assert second["cadastral_number"] is None
     assert create(client, "properties", PROPERTY)["cadastral_number"] is None
     first_url, second_url = (f"/api/properties/{item['id']}" for item in (first, second))
     number = {"cadastral_number": first["cadastral_number"]}
     assert client.patch(first_url, json=number).status_code == 200
+    assert client.patch(first_url, json={"cadastral_number": "02:05:102003:125"}).status_code == 200
+    assert client.patch(first_url, json=number).status_code == 200
     assert client.patch(first_url, json={"status": "archived"}).status_code == 200
-    for response in (client.post("/api/properties", json=PROPERTY | number), client.patch(second_url, json=number)):
+    for response in (
+        client.post("/api/properties", json=PROPERTY | number),
+        client.patch(second_url, json={"cadastral_number": "02:05:102003:125"}),
+    ):
         assert response.status_code == 409
         assert "cadastral_number" in fields(response)
-    assert client.patch(second_url, json={"cadastral_number": "1:02:5:607"}).json()["cadastral_number"] == "1:02:5:607"
+    assert client.patch(second_url, json={"cadastral_number": "74:36:070301:1"}).json()["cadastral_number"] == "74:36:070301:1"
     assert client.patch(second_url, json={"cadastral_number": ""}).json()["cadastral_number"] is None
 
 
-def test_concurrent_cadastral_create(client):
-    def submit():
-        return client.post("/api/properties", json={**PROPERTY, "cadastral_number": "0:1:02:0003"})
+@pytest.mark.parametrize("second", ["02:05:0102003:125", "02:05:102003:125"])
+def test_concurrent_cadastral_create(client, second):
+    def submit(number):
+        return client.post("/api/properties", json={**PROPERTY, "cadastral_number": number})
 
-    assert sorted(concurrent(submit, submit)) == [201, 409]
+    assert sorted(concurrent(lambda: submit("02:05:0102003:125"), lambda: submit(second))) == [201, 409]
 
 
 @pytest.mark.parametrize("value", ["0", "-1", "NaN", "Infinity", "1.001", "1.230", "1000000000000", True])
@@ -91,8 +113,29 @@ def test_contract_and_finance_field_errors(client):
     assert response.status_code == 409 and "amount" in fields(response)
 
 
-def legacy_properties(connection):
-    connection.execute(text(f"ALTER TABLE properties DROP CONSTRAINT {UNIQUE}, DROP CONSTRAINT {CHECK}"))
+def legacy_properties(connection, *, without_check=False):
+    connection.execute(text(f"DROP INDEX {CADASTRAL_KEY_INDEX}"))
+    connection.execute(text(f"ALTER TABLE properties DROP CONSTRAINT {CHECK}"))
+    if not without_check:
+        connection.execute(text(
+            f"ALTER TABLE properties ADD CONSTRAINT {CHECK} CHECK (cadastral_number ~ '^[0-9]+:[0-9]+:[0-9]+:[0-9]+$')"
+        ))
+
+
+def test_migration_replaces_an_existing_check_without_replacing_unique(engine):
+    with engine.begin() as connection:
+        legacy_properties(connection)
+        oid = text("SELECT oid FROM pg_constraint WHERE conrelid = 'properties'::regclass AND conname = :name")
+        unique_before = connection.scalar(oid, {"name": UNIQUE})
+        check_before = connection.scalar(oid, {"name": CHECK})
+        connection.execute(INSERT_PROPERTY, {"value": "74:36:0703001:125"})
+        assert not plan(connection)[0]["constraints_installed"]
+        assert migrate(connection, lambda: "verified.dump")["status"] == "migrated"
+        assert connection.scalar(oid, {"name": UNIQUE}) == unique_before
+        assert connection.scalar(oid, {"name": CHECK}) != check_before
+        assert next(index for index in inspect(connection).get_indexes("properties")
+                    if index["name"] == CADASTRAL_KEY_INDEX)["unique"]
+        assert migrate(connection, lambda: pytest.fail("Unexpected backup"))["status"] == "current"
 
 
 def test_migration_preserves_links_and_finance_and_is_idempotent(engine, client):
@@ -111,8 +154,8 @@ def test_migration_preserves_links_and_finance_and_is_idempotent(engine, client)
         )]
 
     with engine.begin() as connection:
-        legacy_properties(connection)
-        connection.execute(text("UPDATE properties SET cadastral_number = ' 00:1:002:3 ' WHERE id = :id"),
+        legacy_properties(connection, without_check=True)
+        connection.execute(text("UPDATE properties SET cadastral_number = ' 02:05:0102003:125 ' WHERE id = :id"),
                            {"id": base["property_id"]})
         connection.execute(text("UPDATE properties SET cadastral_number = ' ' WHERE cadastral_number IS NULL"))
         # Simulate an older seed row placed in a schema before the length check existed.
@@ -123,7 +166,7 @@ def test_migration_preserves_links_and_finance_and_is_idempotent(engine, client)
         assert plan(connection)[0]["tax_id"]["confirmed_demo_corrections"] == 1
         assert migrate(connection, lambda: "verified.dump")["status"] == "migrated"
         assert snapshot(connection) == before
-        assert connection.scalars(text("SELECT cadastral_number FROM properties ORDER BY id")).all() == ["00:1:002:3", None]
+        assert connection.scalars(text("SELECT cadastral_number FROM properties ORDER BY id")).all() == ["02:05:0102003:125", None]
         assert connection.scalar(text("SELECT tax_id FROM counterparties WHERE name = :name"), {"name": demo.name}) == demo.tax_id
         assert migrate(connection, lambda: pytest.fail("Unexpected backup"))["status"] == "current"
 
@@ -135,9 +178,10 @@ def test_migration_blocks_conflicts_before_backup(engine, conflict):
         if conflict == "tax":
             connection.execute(text("INSERT INTO counterparties (name, tax_id) VALUES ('A', '0012345678')"))
         elif conflict == "duplicate":
-            connection.execute(INSERT_PROPERTY, [{"value": " 0:1:2:3 "}, {"value": "0:1:2:3"}])
+            connection.execute(INSERT_PROPERTY, [{"value": "74:0:0:125"}, {"value": "74:00:0000000:125"}])
+            assert plan(connection)[0]["cadastral_number"]["duplicate_groups"] == 1
         else:
-            connection.execute(INSERT_PROPERTY, {"value": "A"})
+            connection.execute(INSERT_PROPERTY, {"value": "1:2:3:4"})
         with pytest.raises(ValueError, match="Применение остановлено"):
             migrate(connection, lambda: pytest.fail("Unexpected backup"))
         assert not plan(connection)[0]["constraints_installed"]
@@ -146,21 +190,20 @@ def test_migration_blocks_conflicts_before_backup(engine, conflict):
 def test_migration_rolls_back_when_ddl_fails(engine):
     with engine.begin() as connection:
         legacy_properties(connection)
-        connection.execute(text(f"CREATE INDEX {UNIQUE} ON properties (id)"))
-        connection.execute(INSERT_PROPERTY, {"value": " "})
+        connection.execute(text(f"CREATE INDEX {CADASTRAL_KEY_INDEX} ON properties (id)"))
     with pytest.raises(ProgrammingError), engine.begin() as connection:
         migrate(connection, lambda: "verified.dump")
-    with engine.connect() as connection:
-        assert connection.scalar(text("SELECT cadastral_number FROM properties")) == " "
-        assert not {UNIQUE, CHECK} & {
-            item["name"] for item in inspect(connection).get_unique_constraints("properties")
-            + inspect(connection).get_check_constraints("properties")
-        }
+    with engine.begin() as connection:
+        connection.execute(INSERT_PROPERTY, {"value": "1:2:3:4"})
+        assert not plan(connection)[0]["constraints_installed"]
 
 
-@pytest.mark.parametrize(("value", "state"), [("1:2:3", "23514"), ("1:2:3:4\n", "23514"), ("00:1:2:3", "23505")])
+@pytest.mark.parametrize(("value", "state"), [
+    ("1:2:3:4", "23514"), ("74:36:0703001:125\n", "23514"), ("74:36:0703001:0125", "23514"),
+    ("74:36:0703001:125", "23505"), ("74:36:703001:125", "23505"),
+])
 def test_postgresql_checks_direct_writes(engine, client, value, state):
-    create(client, "properties", PROPERTY | {"cadastral_number": "00:1:2:3", "status": "archived"})
+    create(client, "properties", PROPERTY | {"cadastral_number": "74:36:0703001:125", "status": "archived"})
     with pytest.raises(IntegrityError) as error, engine.begin() as connection:
         connection.execute(INSERT_PROPERTY, {"value": value})
     assert error.value.orig.sqlstate == state

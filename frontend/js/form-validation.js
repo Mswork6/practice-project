@@ -1,4 +1,5 @@
 let sequence = 0;
+const cadastralPattern = /^(0:0:0|(0[1-9]|[1-9][0-9]):([0-9]{2}:([0-9]{6,7}|0)|0:(0|0{6,7}))):[1-9][0-9]*$/;
 
 const requiredMessages = {
   name: 'Укажите наименование.',
@@ -20,12 +21,13 @@ function taxError(value) {
   const tax = value.replace(/[\s-]/gu, '');
   if (!tax) return requiredMessages.tax_id;
   if (!/^(?:[0-9]{10}|[0-9]{12})$/.test(tax)) return 'ИНН должен содержать 10 или 12 цифр.';
+  if (!/[1-9]/.test(tax)) return 'ИНН не может состоять только из нулей.';
   const digit = (weights) => weights.reduce((sum, weight, index) => sum + weight * Number(tax[index]), 0) % 11 % 10;
   const legal = tax.length === 10;
   const first = legal ? [2, 4, 10, 3, 5, 9, 4, 6, 8] : [7, 2, 4, 10, 3, 5, 9, 4, 6, 8];
-  if (!/[1-9]/.test(tax) || digit(first) !== Number(tax[first.length]) ||
+  if (digit(first) !== Number(tax[first.length]) ||
       (!legal && digit([3, 7, 2, 4, 10, 3, 5, 9, 4, 6, 8]) !== Number(tax[11]))) {
-    return 'Некорректный ИНН. Проверьте введённые цифры.';
+    return 'Некорректные контрольные цифры ИНН. Проверьте номер.';
   }
 }
 
@@ -72,7 +74,7 @@ function check(control, name, value) {
   if (control.hasAttribute('data-decimal')) return decimalError(value, control.dataset.limit);
   if (name === 'tax_id') return taxError(value);
   if (name === 'email') return emailError(value);
-  if (name === 'cadastral_number' && !/^[0-9]+:[0-9]+:[0-9]+:[0-9]+$/.test(value)) {
+  if (name === 'cadastral_number' && !cadastralPattern.test(value)) {
     return 'Некорректный формат кадастрового номера.';
   }
   if (control.type === 'date') {

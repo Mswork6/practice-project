@@ -27,6 +27,7 @@ def test_full_seed_audit(engine):
         assert list(report["counts"].values()) == list(counts)
         assert 310 < report["counts"]["accruals"] < 500
         assert all(report["term_buckets"])
+        assert "заполненные кадастровые номера корректны и уникальны" in report["checks"]
     with Session(engine) as db:
         assert refresh_demo.fingerprint(db) == digest
 

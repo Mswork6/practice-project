@@ -13,7 +13,10 @@ from .database import get_engine
 from .refresh_demo import default_pg_bin, verified_backup
 from .seed import legacy_individual_tax_number, make_parties
 from .services.counterparty import normalize_tax_id, valid_tax_checksum, valid_tax_id
-from .services.requisites import CADASTRAL_PATTERN, normalize_cadastral, valid_cadastral
+from .services.requisites import (
+    CADASTRAL_CHECK_SQL, CADASTRAL_KEY_INDEX, CADASTRAL_KEY_SQL, CADASTRAL_PATTERN,
+    cadastral_key, normalize_cadastral, valid_cadastral,
+)
 
 UNIQUE = "unique_property_cadastral_number"
 CHECK = "valid_property_cadastral_number"
@@ -28,6 +31,7 @@ def plan(connection):
     properties = connection.execute(text("SELECT id, cadastral_number FROM properties ORDER BY id")).all()
     current_tax = Counter(row.tax_id for row in parties if row.tax_id)
     final_tax, cadastral_counts = Counter(), Counter()
+    cadastral_keys = {}
     tax_updates, cadastral_updates = [], []
     tax = dict(total=len(parties), missing=0, invalid_format=0, all_zero=0, invalid_checksum=0,
                duplicate_groups=sum(count > 1 for count in current_tax.values()), blocked_ids=[])
@@ -59,30 +63,38 @@ def plan(connection):
         cadastral["filled"] += value is not None
         cadastral["surrounding_whitespace"] += original is not None and original != original.strip()
         if value is not None:
-            cadastral_counts[value] += 1
+            key = cadastral_key(value)
+            cadastral_keys[row.id] = key
+            cadastral_counts[key] += 1
             if not valid_cadastral(value):
                 cadastral["invalid_ids"].append(row.id)
         if value != original:
             cadastral_updates.append({"id": row.id, "value": value})
 
     cadastral["duplicate_groups"] = sum(count > 1 for count in cadastral_counts.values())
-    cadastral["duplicate_ids"] = [
-        row.id for row in properties if cadastral_counts[normalize_cadastral(row.cadastral_number)] > 1
-    ]
+    cadastral["duplicate_ids"] = [id for id, key in cadastral_keys.items() if cadastral_counts[key] > 1]
     cadastral["normalizations"] = len(cadastral_updates)
     metadata = inspect(connection)
     unique = {item["name"] for item in metadata.get_unique_constraints("properties")
               if item["column_names"] == ["cadastral_number"]}
-    checks = {item["name"] for item in metadata.get_check_constraints("properties")}
-    installed = UNIQUE in unique and CHECK in checks
-    report = {"tax_id": tax, "cadastral_number": cadastral, "constraints_installed": installed}
-    return report, tax_updates, cadastral_updates, UNIQUE in unique, CHECK in checks
+    checks = {item["name"]: item["sqltext"] for item in metadata.get_check_constraints("properties")}
+    expected_check = f"cadastral_number::text ~ '{CADASTRAL_PATTERN}'::text"
+    check_state = "current" if checks.get(CHECK) == expected_check else ("outdated" if CHECK in checks else "missing")
+    has_key_index = any(item["name"] == CADASTRAL_KEY_INDEX and item["unique"]
+                        and item["column_names"] == [None] and not item.get("dialect_options", {}).get("postgresql_where")
+                        for item in metadata.get_indexes("properties"))
+    report = {
+        "tax_id": tax, "cadastral_number": cadastral, "cadastral_check": check_state,
+        "cadastral_key_index": has_key_index, "cadastral_unique": UNIQUE in unique,
+        "constraints_installed": UNIQUE in unique and check_state == "current" and has_key_index,
+    }
+    return report, tax_updates, cadastral_updates
 
 
 def migrate(connection, backup):
     connection.execute(text("SET LOCAL lock_timeout TO '10s'"))
     connection.execute(text("LOCK TABLE counterparties, properties IN SHARE ROW EXCLUSIVE MODE"))
-    report, tax_updates, cadastral_updates, has_unique, has_check = plan(connection)
+    report, tax_updates, cadastral_updates = plan(connection)
     tax, cadastral = report["tax_id"], report["cadastral_number"]
     if (tax["blocked_ids"] or tax["target_conflict_groups"] or tax["occupied_replacement_ids"]
             or cadastral["invalid_ids"] or cadastral["duplicate_groups"]):
@@ -95,13 +107,18 @@ def migrate(connection, backup):
         connection.execute(text("UPDATE counterparties SET tax_id = :value WHERE id = :id"), tax_updates)
     if cadastral_updates:
         connection.execute(text("UPDATE properties SET cadastral_number = :value WHERE id = :id"), cadastral_updates)
-    if not has_unique:
+    if not report["cadastral_unique"]:
         connection.execute(text(f"ALTER TABLE properties ADD CONSTRAINT {UNIQUE} UNIQUE (cadastral_number)"))
-    if not has_check:
-        connection.execute(text(
-            f"ALTER TABLE properties ADD CONSTRAINT {CHECK} CHECK (cadastral_number ~ '{CADASTRAL_PATTERN}')"
-        ))
-    return {**report, "status": "migrated", "constraints_installed": True, "backup": str(destination)}
+    if report["cadastral_check"] == "outdated":
+        connection.execute(text(f"ALTER TABLE properties DROP CONSTRAINT {CHECK}"))
+    if report["cadastral_check"] != "current":
+        connection.execute(text(f"ALTER TABLE properties ADD CONSTRAINT {CHECK} CHECK ({CADASTRAL_CHECK_SQL})"))
+    if not report["cadastral_key_index"]:
+        connection.execute(text(f"CREATE UNIQUE INDEX {CADASTRAL_KEY_INDEX} ON properties ({CADASTRAL_KEY_SQL})"))
+    return {
+        **report, "status": "migrated", "cadastral_check": "current", "cadastral_key_index": True,
+        "cadastral_unique": True, "constraints_installed": True, "backup": str(destination),
+    }
 
 
 def main():

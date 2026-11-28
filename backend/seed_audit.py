@@ -11,7 +11,7 @@ from .seed import TABLES
 from .services.counterparty import clean_email, valid_tax_checksum
 from .services.dashboard import calculate, months_between, shift_month
 from .services.registry import contract_state
-from .services.requisites import valid_cadastral
+from .services.requisites import cadastral_key, valid_cadastral
 
 MARKERS = re.compile(r"демо|demo|тест|\btest\b|synthetic|синтетическ", re.IGNORECASE)
 REFERENCE = re.compile(r"На основе договора № ([\w/-]+)\.")
@@ -44,7 +44,7 @@ def audit(db: Session, today):
             "ИНН уникальны и проходят проверку контрольных цифр")
     require(all(clean_email(party.email) == party.email for party in parties.values()),
             "адреса электронной почты корректны или отсутствуют")
-    require(len(set(cadastral)) == len(cadastral) and all(map(valid_cadastral, cadastral)),
+    require(all(map(valid_cadastral, cadastral)) and len(set(map(cadastral_key, cadastral))) == len(cadastral),
             "заполненные кадастровые номера корректны и уникальны")
 
     require(all(c.property_id in properties and c.counterparty_id in parties for c in contracts.values())

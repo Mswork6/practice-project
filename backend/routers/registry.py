@@ -12,6 +12,7 @@ from ..schemas import Page, PropertyIn, PropertyOut, PropertyPatch
 from ..schemas import CounterpartyDetail, CounterpartyFields, CounterpartyPatch
 from ..services.counterparty import normalize_tax_id
 from ..services.finance import financial_totals
+from ..services.requisites import CADASTRAL_KEY_INDEX
 from ..validation import FieldError
 from ..services.registry import (
     OPEN_STATES, RENTAL_OBJECT_TYPES, ContractState, compatible, contract_state, property_contracts, property_status,
@@ -64,6 +65,7 @@ def properties(
 
 property_constraints = {
     "unique_property_cadastral_number": (409, "Объект с таким кадастровым номером уже существует.", "cadastral_number"),
+    CADASTRAL_KEY_INDEX: (409, "Объект с таким кадастровым номером уже существует.", "cadastral_number"),
     "valid_property_cadastral_number": (422, "Некорректный формат кадастрового номера.", "cadastral_number"),
 }
 

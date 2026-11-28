@@ -85,9 +85,11 @@ class CounterpartyFields(Schema):
     tax_id: str
     email: str | None = None
 
-    @field_validator("tax_id")
+    @field_validator("tax_id", mode="before")
     @classmethod
     def check_tax_id(cls, value):
+        if value is not None and not isinstance(value, str):
+            raise ValueError("ИНН должен содержать 10 или 12 цифр.")
         value = normalize_tax_id(value)
         if not value:
             raise ValueError("Укажите ИНН контрагента.")
@@ -105,8 +107,10 @@ class CounterpartyIn(CounterpartyFields):
     @field_validator("tax_id")
     @classmethod
     def check_checksum(cls, value):
+        if not value.strip("0"):
+            raise ValueError("ИНН не может состоять только из нулей.")
         if not valid_tax_checksum(value):
-            raise ValueError("Некорректный ИНН. Проверьте введённые цифры.")
+            raise ValueError("Некорректные контрольные цифры ИНН. Проверьте номер.")
         return value
 
 
